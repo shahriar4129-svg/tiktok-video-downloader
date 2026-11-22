@@ -56,7 +56,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
       setShowClose(false)
       return undefined
     }
-    const timer = window.setTimeout(() => setShowClose(true), 3000)
+    const timer = window.setTimeout(() => setShowClose(true), 4000)
     return () => window.clearTimeout(timer)
   }, [open, canRun])
 

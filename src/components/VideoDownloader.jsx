@@ -451,14 +451,19 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       return
     }
     if (result.kind !== 'social') return
+    // Start the file warm-up right away, in parallel with the metadata lookup.
+    // Without a media hint the download function resolves the link itself, so
+    // the 4-second ad beat is enough even for a freshly pasted link. If the
+    // info lookup finishes first, its resolved CDN URLs are reused instead.
+    prefetchBlobs(result.url, currentMode)
     const key = `${result.url}|${currentMode}`
     if (prefetchRef.current.has(key) || prefetchKeyRef.current === key) return
     prefetchAbortRef.current?.abort()
     const controller = new AbortController()
     prefetchAbortRef.current = controller
     prefetchKeyRef.current = key
-    // One lookup only. Once the CDN URLs arrive we warm the file with them,
-    // instead of firing a second resolver call from the download endpoint.
+    // Metadata is looked up once. The file warm-up started above; if it
+    // failed, retry here with the resolved CDN URLs instead.
     const promise = postJsonWithRetry(
       '/api/video/info',
       { url: result.url, mode: currentMode },
