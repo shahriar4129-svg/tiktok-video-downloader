@@ -59,6 +59,30 @@ export function classifyUrl(raw) {
   }
 }
 
+// The backend already keeps its branded names under 240 UTF-8 bytes. Keep a
+// matching cap here, but never cut into the extension — a 120-character slice
+// used to turn a long Bangla title's `.mp4` into a broken `.mp` on save.
+const MAX_NAME_BYTES = 245
+const utf8 = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null
+
+function byteLength(text) {
+  if (utf8) return utf8.encode(text).length
+  return unescape(encodeURIComponent(text)).length
+}
+
+function clipToBytes(text, limit) {
+  if (byteLength(text) <= limit) return text
+  let result = ''
+  let used = 0
+  for (const character of Array.from(text)) {
+    const size = byteLength(character)
+    if (used + size > limit) break
+    result += character
+    used += size
+  }
+  return result.trimEnd()
+}
+
 /** Build a safe, human-readable filename for the downloaded file. */
 export function videoFilename(url, contentType, suggested) {
   let name = suggested || ''
@@ -73,13 +97,15 @@ export function videoFilename(url, contentType, suggested) {
 
   name = name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '').trim()
 
-  if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+  const found = name.match(/\.([a-z0-9]{2,5})$/i)
+  let extension = found?.[1]
+  if (!extension) {
     const rawType = (contentType || '').match(/video\/([\w.+-]+)/)?.[1] || 'mp4'
-    const extension = rawType === 'x-matroska' ? 'mkv' : rawType.replace('x-', '')
-    name = `${name || 'video'}.${extension}`
+    extension = rawType === 'x-matroska' ? 'mkv' : rawType.replace('x-', '')
   }
-
-  return name.slice(0, 120)
+  const base = (found ? name.slice(0, -found[0].length) : name).trim() || 'video'
+  const suffix = `.${extension}`
+  return `${clipToBytes(base, MAX_NAME_BYTES - byteLength(suffix))}${suffix}`
 }
 
 /**
