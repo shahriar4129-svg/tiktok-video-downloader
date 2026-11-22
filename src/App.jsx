@@ -1,4 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react'
+import { Analytics } from '@vercel/analytics/react'
 import { Check, ShieldCheck, Video, X } from 'lucide-react'
 import VideoDownloader from './components/VideoDownloader.jsx'
 import BannerAd from './components/BannerAd.jsx'
@@ -94,6 +95,8 @@ export default function App() {
           {toast.message}
         </div>
       )}
+
+      <Analytics />
     </div>
   )
 }
