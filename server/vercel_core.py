@@ -537,7 +537,12 @@ def parse_quality(value):
     height = int(text)
     if height < 144 or height > 4320:
         raise ValueError("Invalid video quality.")
+    # Prefer H.264 + AAC so the saved MP4 plays in Windows Media Player,
+    # QuickTime and browsers without paid HEVC codec extensions. HEVC-only
+    # sources are transcoded by the download endpoint when necessary.
     return height, (
+        f"bestvideo[vcodec^=avc1][height<={height}]+bestaudio[acodec^=mp4a]/"
+        f"bestvideo[vcodec^=h264][height<={height}]+bestaudio/"
         f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
     )
 

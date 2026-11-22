@@ -9,6 +9,7 @@ import glob
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -54,6 +55,35 @@ install_security_headers(app)
 
 CHUNK_SIZE = 64 * 1024
 RATE_MESSAGE = "Too many requests. Please try again in a few minutes."
+
+
+def is_h264_video(meta):
+    """True when the picked format already uses universally supported H.264."""
+    downloads = meta.get("requested_downloads") or []
+    sources = [entry.get("format") or {} for entry in downloads if isinstance(entry, dict)]
+    if not sources and isinstance(meta.get("format"), dict):
+        sources = [meta["format"]]
+    codecs = [str(source.get("vcodec") or "") for source in sources]
+    codecs = [codec for codec in codecs if codec and codec != "none"]
+    if not codecs:
+        return True
+    return all(codec.startswith(("avc1", "h264")) for codec in codecs)
+
+
+def make_compatible_mp4(path, workdir):
+    """Re-encode HEVC/VP9 to H.264 + AAC so the file plays without extra codecs."""
+    if not FFMPEG:
+        return path
+    output = os.path.join(workdir, "compatible.mp4")
+    command = [
+        FFMPEG, "-y", "-loglevel", "error", "-i", path,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", output,
+    ]
+    subprocess.run(command, check=True, timeout=240, capture_output=True)
+    os.remove(path)
+    return output
 
 
 def iter_file(path):
@@ -180,6 +210,13 @@ def video_download(payload: dict, request: Request):
                         meta = ydl.extract_info(url, download=True)
                         path = locate_download(workdir, ydl, meta, mode)
                     if path:
+                        if mode == "video" and not is_h264_video(meta):
+                            try:
+                                path = make_compatible_mp4(path, workdir)
+                            except Exception as exc:
+                                # Keep the original file if re-encoding is not
+                                # possible — a playable source beats no file.
+                                log_failure("h264 transcode", exc)
                         break
                     last_error = RuntimeError("Downloaded file was not found.")
                 except Exception as exc:
