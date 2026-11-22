@@ -491,7 +491,8 @@ except OSError:
 
 
 def file_cache_key(url, mode, quality, story_id=""):
-    raw = f"{url}|{mode}|{quality}|{story_id or ''}"
+    # v2: files cached before the H.264 compatibility fix must not be reused.
+    raw = f"v2|{url}|{mode}|{quality}|{story_id or ''}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 

@@ -57,29 +57,53 @@ CHUNK_SIZE = 64 * 1024
 RATE_MESSAGE = "Too many requests. Please try again in a few minutes."
 
 
-def is_h264_video(meta):
-    """True when the picked format already uses universally supported H.264."""
-    downloads = meta.get("requested_downloads") or []
-    sources = [entry.get("format") or {} for entry in downloads if isinstance(entry, dict)]
-    if not sources and isinstance(meta.get("format"), dict):
-        sources = [meta["format"]]
-    codecs = [str(source.get("vcodec") or "") for source in sources]
-    codecs = [codec for codec in codecs if codec and codec != "none"]
-    if not codecs:
+def needs_transcode(path):
+    """Inspect the real file, not yt-dlp metadata.
+
+    yt-dlp can report `h264` for a file that Windows still rejects (10-bit,
+    4:4:4, an unusual profile, or a mismatched container tag). Reading the
+    stream info with ffmpeg is the only reliable check before saving.
+    """
+    if not FFMPEG:
+        return False
+    try:
+        result = subprocess.run(
+            [FFMPEG, "-hide_banner", "-i", path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+        )
+    except Exception:
         return True
-    return all(codec.startswith(("avc1", "h264")) for codec in codecs)
+    info = (result.stderr or "").lower()
+    video_lines = [line for line in info.splitlines() if "video:" in line]
+    if not video_lines:
+        return True
+    video = video_lines[0]
+    if "h264" not in video and "avc" not in video:
+        return True
+    # 10-bit and 4:4:4 H.264 are not playable by Windows Media Foundation.
+    if "yuv420p10" in video or "yuv444" in video:
+        return True
+    if "yuv420p" not in video and "yuvj420p" not in video:
+        return True
+    for line in (line for line in info.splitlines() if "audio:" in line):
+        if "aac" not in line and "mp3" not in line:
+            return True
+    return False
 
 
 def make_compatible_mp4(path, workdir):
-    """Re-encode HEVC/VP9 to H.264 + AAC so the file plays without extra codecs."""
+    """Re-encode anything unusual to H.264/AAC in a standard MP4 container."""
     if not FFMPEG:
         return path
     output = os.path.join(workdir, "compatible.mp4")
     command = [
         FFMPEG, "-y", "-loglevel", "error", "-i", path,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart", output,
+        "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
+        "-crf", "23", "-pix_fmt", "yuv420p", "-tag:v", "avc1",
+        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output,
     ]
     subprocess.run(command, check=True, timeout=240, capture_output=True)
     os.remove(path)
@@ -210,7 +234,7 @@ def video_download(payload: dict, request: Request):
                         meta = ydl.extract_info(url, download=True)
                         path = locate_download(workdir, ydl, meta, mode)
                     if path:
-                        if mode == "video" and not is_h264_video(meta):
+                        if mode == "video" and needs_transcode(path):
                             try:
                                 path = make_compatible_mp4(path, workdir)
                             except Exception as exc:
