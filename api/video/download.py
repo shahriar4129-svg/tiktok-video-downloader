@@ -93,7 +93,8 @@ def needs_transcode(path):
     # AAC is the safest audio codec inside MP4. Anything else (Opus, MP3,
     # Vorbis, PCM) gets normalised too — some players reject those in MP4.
     for line in (line for line in info.splitlines() if "audio:" in line):
-        if "aac" not in line:
+        # HE-AAC/HE-AACv2 is not decoded by some older players; force AAC-LC.
+        if "aac" not in line or "he-aac" in line:
             return True
     return False
 

@@ -91,7 +91,9 @@ def video_info(payload: dict, request: Request):
             "thumbnail": tikwm.get("cover") or tikwm.get("origin_cover"),
             "uploader": f"@{author.get('unique_id')}" if author.get("unique_id") else None,
             "platform": "TikTok",
-            "formats": [{"height": 720, "ext": "mp4", "filesize": int(size)}],
+            # TikWM exposes one clean HD stream; the exact pixel height is
+            # only known after download, so label it honestly as HD.
+            "formats": [{"height": 720, "label": "HD", "ext": "mp4", "filesize": int(size)}],
             "variant": "tikwm",
         }
         cache_info(url, result)

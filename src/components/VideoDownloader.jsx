@@ -783,7 +783,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const qualityOptions = (remoteInfo?.formats || []).length
     ? remoteInfo.formats.map((item) => ({
         value: String(item.height),
-        label: `${item.height}p`,
+        label: item.label || `${item.height}p`,
         size: item.filesize || 0,
       }))
     : FALLBACK_QUALITIES
