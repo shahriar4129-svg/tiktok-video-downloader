@@ -332,7 +332,10 @@ def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
     return options
 
 
-STRATEGIES = ("app22", "app16", "aweme1128", "app21", "safari", "web")
+# aweme1128/app21 are the app-API paths that still work from most networks;
+# try them before the web and legacy app paths (which datacenter IPs often get
+# 403 on). Order matters here — each failed attempt costs real time.
+STRATEGIES = ("aweme1128", "app21", "web", "app22", "app16", "safari")
 
 
 def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None):
@@ -347,7 +350,7 @@ def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None):
         order.insert(0, preferred)
     # Fast metadata lookups retry only the two strongest paths. Downloads keep
     # the full second cycle for resilience when TikTok blocks intermittently.
-    order = order + (["app22", "app16"] if fast else list(STRATEGIES))
+    order = order + (["aweme1128", "app21"] if fast else list(STRATEGIES))
     return [ydl_options(outtmpl, name, mode, fast=fast) for name in order]
 
 
@@ -429,6 +432,8 @@ def error_category(exc):
     if any(k in text for k in (
         "403", "forbidden", "blocked", "unable to download webpage", "sign in to confirm",
         "verify you are human", "captcha", "slardar", "challenge", "bot",
+        # TikTok API status codes for region/availability blocks.
+        "10231", "10204", "10222", "100004", "not available",
     )):
         return "blocked"
     if any(k in text for k in ("429", "too many requests", "rate limit")):
