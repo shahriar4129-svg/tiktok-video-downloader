@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "server"))
 
 
-from tikwm import tikwm_data, tikwm_media  # noqa: E402
+from tikwm import tikwm_data, tikwm_media, tikwm_media_candidates  # noqa: E402
 
 from vercel_core import (  # noqa: E402
     cached_info,
@@ -100,6 +100,11 @@ def video_info(payload: dict, request: Request):
             "media": {
                 "video": tikwm_media(tikwm, "video"),
                 "audio": tikwm_media(tikwm, "mp3"),
+                # Other CDN mirrors for the same file. The downloader races
+                # them with a short timeout so one hanging edge cannot stretch
+                # the wait (and the ad-close timing) for a whole video.
+                "video_alternates": tikwm_media_candidates(tikwm, "video"),
+                "audio_alternates": tikwm_media_candidates(tikwm, "mp3"),
                 "title": tikwm.get("title") or "tiktok",
                 "id": tikwm.get("id") or "video",
                 "duration": tikwm.get("duration"),

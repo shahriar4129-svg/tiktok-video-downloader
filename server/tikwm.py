@@ -76,17 +76,32 @@ def tikwm_data(url):
 
 def tikwm_media(data, mode="video"):
     """Pick a validated media URL from a TikWM response."""
+    candidates = tikwm_media_candidates(data, mode)
+    return candidates[0] if candidates else None
+
+
+def tikwm_media_candidates(data, mode="video"):
+    """Ordered, de-duplicated CDN mirrors for the same video.
+
+    TikWM returns a clean HD stream plus plain/watermarked alternates. They can
+    live on different CDN edges; one edge may hang while another is healthy.
+    The downloader races these mirrors so a single slow host cannot decide how
+    long the visitor waits for the file.
+    """
     if not isinstance(data, dict):
-        return None
+        return []
     if mode == "mp3":
-        candidates = (data.get("music"), data.get("play"))
+        raw = (data.get("music"), data.get("play"), data.get("wmplay"))
     else:
-        candidates = (data.get("hdplay"), data.get("play"))
-    for candidate in candidates:
+        raw = (data.get("hdplay"), data.get("play"), data.get("wmplay"))
+    result = []
+    for candidate in raw:
         if not isinstance(candidate, str) or not candidate.strip():
             continue
         try:
-            return validate_media_url(candidate)
+            url = validate_media_url(candidate)
         except (ValueError, TypeError):
             continue
-    return None
+        if url not in result:
+            result.append(url)
+    return result

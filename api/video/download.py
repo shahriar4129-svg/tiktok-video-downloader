@@ -22,7 +22,7 @@ from starlette.background import BackgroundTask
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "server"))
 
-from tikwm import tikwm_data, tikwm_media  # noqa: E402
+from tikwm import tikwm_data, tikwm_media_candidates  # noqa: E402
 
 from vercel_core import (  # noqa: E402
     FFMPEG,
@@ -32,6 +32,7 @@ from vercel_core import (  # noqa: E402
     client_ip,
     error_category,
     fetch_media,
+    fetch_media_raced,
     file_cache_key,
     install_security_headers,
     locate_download,
@@ -250,71 +251,66 @@ def video_download(payload: dict, request: Request):
                 handle.write(content)
             meta = {"title": f"tiktok-story-{story_id}", "id": story_id}
         else:
-            # Prefer the CDN URL resolved by /api/video/info. That keeps one
-            # paste -> download flow down to a single TikWM lookup; a second
-            # independent call from this function was the flaky part.
+            # Prefer the CDN mirrors resolved by /api/video/info. That keeps
+            # one paste -> download flow down to a single TikWM lookup, and
+            # racing the mirrors stops one hanging edge from stretching the
+            # wait (and the ad-close timing) for the whole video.
             media_hint = payload.get("media")
             resolved = media_hint if isinstance(media_hint, dict) else {}
+            mirror_key = "audio_alternates" if mode == "mp3" else "video_alternates"
+            mirrors = list(resolved.get(mirror_key) or [])
             raw_media = resolved.get("audio") if mode == "mp3" else resolved.get("video")
-            media_url = None
             if isinstance(raw_media, str) and raw_media.strip():
                 try:
-                    media_url = validate_media_url(raw_media)
+                    primary = validate_media_url(raw_media)
+                    mirrors = [primary] + [item for item in mirrors if item != primary]
                 except (ValueError, TypeError) as exc:
                     log_failure("media hint", exc)
 
             data = resolved or None
-            if not media_url:
+            if not mirrors:
                 data = tikwm_data(url)
                 if data:
-                    media_url = tikwm_media(data, mode)
+                    mirrors = tikwm_media_candidates(data, mode)
 
             extension = ".mp3" if mode == "mp3" else ".mp4"
             path = os.path.join(workdir, "media" + extension)
             tikwm_ok = False
-            if media_url and cffi_requests is not None:
+
+            def save_media(content, source):
+                nonlocal path
+                with open(path, "wb") as handle:
+                    handle.write(content)
+                meta = {
+                    "title": (source or {}).get("title") or "tiktok",
+                    "id": (source or {}).get("id") or "video",
+                    "duration": (source or {}).get("duration"),
+                }
+                if mode == "video" and needs_transcode(path):
+                    try:
+                        path = make_compatible_mp4(path, workdir)
+                    except Exception as exc:
+                        log_failure("h264 transcode", exc)
+                return meta
+
+            if mirrors and cffi_requests is not None:
                 try:
-                    session = cffi_requests.Session(impersonate="chrome")
-                    content, content_type = fetch_media(media_url, session)
-                    with open(path, "wb") as handle:
-                        handle.write(content)
-                    meta = {
-                        "title": (data or {}).get("title") or "tiktok",
-                        "id": (data or {}).get("id") or "video",
-                        "duration": (data or {}).get("duration"),
-                    }
-                    if mode == "video" and needs_transcode(path):
-                        try:
-                            path = make_compatible_mp4(path, workdir)
-                        except Exception as exc:
-                            log_failure("h264 transcode", exc)
+                    content, _content_type = fetch_media_raced(mirrors)
+                    meta = save_media(content, data)
                     tikwm_ok = True
                 except Exception as exc:
                     log_failure("tikwm download", exc)
                     # A signed CDN URL can expire between the info lookup and
-                    # the click. Resolve once more before using the fallback.
-                    if media_hint:
-                        fresh = tikwm_data(url)
-                        retry_url = tikwm_media(fresh, mode) if fresh else None
-                        if retry_url:
-                            try:
-                                session = cffi_requests.Session(impersonate="chrome")
-                                content, content_type = fetch_media(retry_url, session)
-                                with open(path, "wb") as handle:
-                                    handle.write(content)
-                                meta = {
-                                    "title": fresh.get("title") or "tiktok",
-                                    "id": fresh.get("id") or "video",
-                                    "duration": fresh.get("duration"),
-                                }
-                                if mode == "video" and needs_transcode(path):
-                                    try:
-                                        path = make_compatible_mp4(path, workdir)
-                                    except Exception as exc:
-                                        log_failure("h264 transcode retry", exc)
-                                tikwm_ok = True
-                            except Exception as exc:
-                                log_failure("tikwm download retry", exc)
+                    # the click. Resolve once more, then race the fresh mirrors.
+                    fresh = tikwm_data(url)
+                    retry_urls = tikwm_media_candidates(fresh, mode) if fresh else []
+                    if retry_urls:
+                        try:
+                            content, _content_type = fetch_media_raced(retry_urls)
+                            meta = save_media(content, fresh)
+                            tikwm_ok = True
+                        except Exception as exc:
+                            log_failure("tikwm download retry", exc)
 
             if not tikwm_ok:
                 variants = ydl_variants(

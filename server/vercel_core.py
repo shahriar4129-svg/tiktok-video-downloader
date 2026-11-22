@@ -20,6 +20,7 @@ import socket
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlparse
 
 from fastapi.responses import JSONResponse
@@ -712,7 +713,7 @@ def story_media(story_id, url):
     return entry["media"]
 
 
-def fetch_media(url, session, max_redirects=3, timeout=40, max_bytes=MAX_BYTES):
+def fetch_media(url, session, max_redirects=3, timeout=12, max_bytes=MAX_BYTES):
     """Fetch TikTok CDN media with SSRF checks on every hop.
 
     Redirects are followed manually so a CDN cannot bounce the request to an
@@ -740,3 +741,105 @@ def fetch_media(url, session, max_redirects=3, timeout=40, max_bytes=MAX_BYTES):
             raise StoryError("This story file is too large to save.")
         return content, (response.headers.get("content-type") or "").lower()
     raise StoryError("This story media redirected too many times.")
+
+
+def fetch_media_fast(url, timeout=5, chunks=4, max_bytes=MAX_BYTES):
+    """Download one CDN file in parallel byte ranges.
+
+    TikTok's CDN supports Range requests. A single connection can be slow or
+    stall near the end; four short, parallel ranges finish in roughly the same
+    time for a 3 MB and a 6 MB file. That is what keeps the file ready — and
+    therefore the ad-close beat — consistent across videos of any length.
+    """
+    current = validate_media_url(url)
+    headers = {"Referer": "https://www.tiktok.com/"}
+    for _ in range(4):
+        response = cffi_requests.Session(impersonate="chrome").get(
+            current,
+            headers={**headers, "Range": "bytes=0-0"},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if response.status_code in (301, 302, 303, 307, 308):
+            location = response.headers.get("location")
+            if not location:
+                raise StoryError("This video's media redirect is incomplete.")
+            current = validate_media_url(urljoin(current, location))
+            continue
+        break
+
+    if response.status_code >= 400:
+        raise StoryError("This video's media download failed.")
+
+    total = None
+    content_range = response.headers.get("content-range") or ""
+    if response.status_code == 206 and "/" in content_range:
+        try:
+            total = int(content_range.rsplit("/", 1)[-1])
+        except (TypeError, ValueError):
+            total = None
+    if not total or total > max_bytes:
+        # Range not supported — reuse the probe body when it is the whole file.
+        if response.status_code == 200 and len(response.content) <= max_bytes:
+            return response.content, (response.headers.get("content-type") or "").lower()
+        raise StoryError("This video's file is too large to save.")
+
+    def part(index):
+        start = (index * total) // chunks
+        end = ((index + 1) * total) // chunks - 1
+        if end < start:
+            return b""
+        session = cffi_requests.Session(impersonate="chrome")
+        result = session.get(
+            current,
+            headers={**headers, "Range": f"bytes={start}-{end}"},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if result.status_code not in (200, 206):
+            raise StoryError("This video's media download failed.")
+        return result.content
+
+    executor = ThreadPoolExecutor(max_workers=chunks)
+    try:
+        results = list(executor.map(part, range(chunks)))
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    content = b"".join(results)
+    if len(content) != total:
+        raise StoryError("This video's media download was incomplete.")
+    return content, (response.headers.get("content-type") or "").lower()
+
+
+def fetch_media_raced(urls, timeout=5, max_bytes=MAX_BYTES):
+    """Fetch the first usable CDN mirror for the same video.
+
+    Mirrors are tried in order, not all at once — downloading three full files
+    in parallel only splits the bandwidth. A dead mirror fails fast (503), and
+    a healthy one is pulled in parallel ranges so the wait stays short and
+    even across long and short videos.
+    """
+    candidates = []
+    for candidate in urls or []:
+        if not isinstance(candidate, str) or not candidate.strip():
+            continue
+        try:
+            candidate = validate_media_url(candidate)
+        except (ValueError, TypeError):
+            continue
+        if candidate not in candidates:
+            candidates.append(candidate)
+    if not candidates:
+        raise StoryError("No usable media URL was returned for this video.")
+
+    if cffi_requests is None:
+        raise StoryError("curl-cffi is required to save this video.")
+
+    first_error = None
+    for candidate in candidates:
+        try:
+            return fetch_media_fast(candidate, timeout=timeout, max_bytes=max_bytes)
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+    raise (first_error or StoryError("This video's media is unavailable."))
