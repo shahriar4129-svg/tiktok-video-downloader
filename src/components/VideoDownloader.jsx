@@ -202,35 +202,84 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     setBlobUrl(next)
   }
 
+  // The public resolver can be briefly slow or rate-limited. Retry those
+  // transient failures quietly so the visitor rarely sees an error card.
+  const RETRYABLE = /try again|busy|temporar|could not read|failed|rate|too many/i
+  const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+  async function postJsonWithRetry(path, body, attempts = 3, signal) {
+    let lastError
+    for (let i = 0; i < attempts; i += 1) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      try {
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          ...(signal ? { signal } : {}),
+        })
+        const payload = await response.json().catch(() => ({}))
+        if (response.ok) return payload
+        lastError = new Error(payload.error || `Request failed (${response.status})`)
+        if (response.status < 500 && !RETRYABLE.test(payload.error || '')) break
+      } catch (cause) {
+        if (signal?.aborted || cause?.name === 'AbortError') throw cause
+        lastError = cause
+      }
+      if (i < attempts - 1) await wait(500 * (i + 1))
+    }
+    throw lastError
+  }
+
   // One shared request path for both the foreground save and the background
   // warm-up. `signal` is only passed by the foreground job so a cancelled job
   // cannot abort a file that another visitor session is warming.
-  async function requestSocialBlob({ url, quality, mode, storyId, platform, signal }) {
-    const response = await fetch('/api/video/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, quality, mode, storyId, variant: variantRef.current }),
-      ...(signal ? { signal } : {}),
-    })
-    if (!response.ok) {
+  async function requestSocialBlob({ url, quality, mode, storyId, platform, signal, media }) {
+    let lastError
+    for (let i = 0; i < 3; i += 1) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      let response
+      try {
+        response = await fetch('/api/video/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url, quality, mode, storyId,
+            variant: variantRef.current,
+            // Reuse the CDN URLs from the info lookup — no second resolver call.
+            media,
+          }),
+          ...(signal ? { signal } : {}),
+        })
+      } catch (cause) {
+        if (signal?.aborted || cause?.name === 'AbortError') throw cause
+        lastError = cause
+        if (i < 2) await wait(500 * (i + 1))
+        continue
+      }
+      if (response.ok) {
+        const blob = await response.blob()
+        const disposition = response.headers.get('content-disposition') || ''
+        const fallbackExt = mode === 'mp3' ? '.mp3' : '.mp4'
+        const name = downloadNameFromDisposition(
+          disposition,
+          url,
+          `${platform || 'video'}${fallbackExt}`,
+        )
+        return { blob, name, size: blob.size }
+      }
       const body = await response.json().catch(() => ({}))
-      throw new Error(body.error || `Request failed (${response.status})`)
+      lastError = new Error(body.error || `Request failed (${response.status})`)
+      if (signal?.aborted || (response.status < 500 && !RETRYABLE.test(body.error || ''))) break
+      if (i < 2) await wait(500 * (i + 1))
     }
-    const blob = await response.blob()
-    const disposition = response.headers.get('content-disposition') || ''
-    const fallbackExt = mode === 'mp3' ? '.mp3' : '.mp4'
-    const name = downloadNameFromDisposition(
-      disposition,
-      url,
-      `${platform || 'video'}${fallbackExt}`,
-    )
-    return { blob, name, size: blob.size }
+    throw lastError
   }
 
   // Start preparing the likely file as soon as a link is pasted. By the time
   // the visitor picks a format and sits through the ad beat, the Blob is usually
   // already here, so "Remove ads" is active the moment it fades in.
-  function prefetchBlobs(rawUrl, currentMode) {
+  function prefetchBlobs(rawUrl, currentMode, media) {
     if (currentMode !== 'video' && currentMode !== 'mp3') return
     // quality 4320 means "best available" to the backend, so the warm-up does
     // not have to wait for the metadata lookup to learn the exact resolution.
@@ -239,7 +288,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       : [{ key: `${rawUrl}|video|hd`, mode: 'video', quality: '4320' }]
     plan.forEach(({ key, mode, quality }) => {
       if (blobCacheRef.current.has(key) || blobPrefetchRef.current.has(key)) return
-      const promise = requestSocialBlob({ url: rawUrl, quality, mode })
+      const promise = requestSocialBlob({ url: rawUrl, quality, mode, media })
       blobPrefetchRef.current.set(key, promise)
       promise
         .then((base) => blobCacheRef.current.set(key, base))
@@ -402,29 +451,26 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       return
     }
     if (result.kind !== 'social') return
-    // Warm the file in parallel with metadata — no need to wait for the info
-    // response to find out which resolution is the best one.
-    prefetchBlobs(result.url, currentMode)
     const key = `${result.url}|${currentMode}`
     if (prefetchRef.current.has(key) || prefetchKeyRef.current === key) return
     prefetchAbortRef.current?.abort()
     const controller = new AbortController()
     prefetchAbortRef.current = controller
     prefetchKeyRef.current = key
-    const promise = fetch('/api/video/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: result.url, mode: currentMode }),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) return
-        const body = await response.json().catch(() => null)
-        if (body) {
-          prefetchRef.current.set(key, body)
-          if (body.variant) variantRef.current = body.variant
-          rememberLink(result.url)
-        }
+    // One lookup only. Once the CDN URLs arrive we warm the file with them,
+    // instead of firing a second resolver call from the download endpoint.
+    const promise = postJsonWithRetry(
+      '/api/video/info',
+      { url: result.url, mode: currentMode },
+      3,
+      controller.signal,
+    )
+      .then((body) => {
+        if (!body) return
+        prefetchRef.current.set(key, body)
+        if (body.variant) variantRef.current = body.variant
+        rememberLink(result.url)
+        prefetchBlobs(result.url, currentMode, body.media)
       })
       .catch(() => {
         // Best effort only — the real click still surfaces any error.
@@ -594,20 +640,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           body = prefetchRef.current.get(key)
         }
         if (!body) {
-          const response = await fetch('/api/video/info', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: result.url, mode }),
-          })
-          body = await response.json().catch(() => ({}))
-          if (!response.ok) throw new Error(body.error || 'This link could not be read.')
+          body = await postJsonWithRetry('/api/video/info', { url: result.url, mode })
         }
         setOpening(false)
         setRemoteInfo(body)
         if (body.variant) variantRef.current = body.variant
         rememberLink(result.url)
         // Also warm the file here — a fast click can beat the paste-time prefetch.
-        prefetchBlobs(result.url, mode)
+        prefetchBlobs(result.url, mode, body.media)
 
         // Show the thumbnail plus the exact formats this video offers.
         const heights = (body.formats || [])
@@ -666,6 +706,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         storyId: wantedStory,
         platform: link.platform,
         signal: controller.signal,
+        media: remoteInfo?.media,
       })
       return { ...base, objectUrl: URL.createObjectURL(base.blob) }
     } finally {

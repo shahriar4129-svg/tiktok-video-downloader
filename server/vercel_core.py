@@ -460,10 +460,7 @@ def error_category(exc):
 def with_hint(message, category="generic"):
     """Add a short, visitor-friendly next step. Full detail stays in server logs."""
     if category == "blocked":
-        hint = (
-            " Tip: TikTok is blocking this network right now. Try again later, switch networks, "
-            "or paste a direct video link."
-        )
+        hint = " Tip: the video service is busy right now. Please try again in a moment."
     elif category == "login":
         hint = " Tip: This clip is private, age-restricted, or login-only. Please use a public TikTok link."
     elif category == "unavailable":

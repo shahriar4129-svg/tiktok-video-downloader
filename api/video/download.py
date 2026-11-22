@@ -46,6 +46,7 @@ from vercel_core import (  # noqa: E402
     StoryError,
     story_media,
     store_file,
+    validate_media_url,
     validate_story_id,
     validate_tiktok_url,
     with_hint,
@@ -221,33 +222,71 @@ def video_download(payload: dict, request: Request):
                 handle.write(content)
             meta = {"title": f"tiktok-story-{story_id}", "id": story_id}
         else:
-            # TikTok blocks Vercel's IPs directly, so try the public metadata
-            # service first and stream its CDN URL. yt-dlp is the fallback.
+            # Prefer the CDN URL resolved by /api/video/info. That keeps one
+            # paste -> download flow down to a single TikWM lookup; a second
+            # independent call from this function was the flaky part.
+            media_hint = payload.get("media")
+            resolved = media_hint if isinstance(media_hint, dict) else {}
+            raw_media = resolved.get("audio") if mode == "mp3" else resolved.get("video")
+            media_url = None
+            if isinstance(raw_media, str) and raw_media.strip():
+                try:
+                    media_url = validate_media_url(raw_media)
+                except (ValueError, TypeError) as exc:
+                    log_failure("media hint", exc)
+
+            data = resolved or None
+            if not media_url:
+                data = tikwm_data(url)
+                if data:
+                    media_url = tikwm_media(data, mode)
+
+            extension = ".mp3" if mode == "mp3" else ".mp4"
+            path = os.path.join(workdir, "media" + extension)
             tikwm_ok = False
-            tikwm = tikwm_data(url)
-            if tikwm:
-                media_url = tikwm_media(tikwm, mode)
-                if media_url and cffi_requests is not None:
-                    try:
-                        session = cffi_requests.Session(impersonate="chrome")
-                        content, content_type = fetch_media(media_url, session)
-                        extension = ".mp3" if mode == "mp3" else ".mp4"
-                        path = os.path.join(workdir, "media" + extension)
-                        with open(path, "wb") as handle:
-                            handle.write(content)
-                        meta = {
-                            "title": tikwm.get("title") or "tiktok",
-                            "id": tikwm.get("id") or "video",
-                            "duration": tikwm.get("duration"),
-                        }
-                        if mode == "video" and needs_transcode(path):
+            if media_url and cffi_requests is not None:
+                try:
+                    session = cffi_requests.Session(impersonate="chrome")
+                    content, content_type = fetch_media(media_url, session)
+                    with open(path, "wb") as handle:
+                        handle.write(content)
+                    meta = {
+                        "title": (data or {}).get("title") or "tiktok",
+                        "id": (data or {}).get("id") or "video",
+                        "duration": (data or {}).get("duration"),
+                    }
+                    if mode == "video" and needs_transcode(path):
+                        try:
+                            path = make_compatible_mp4(path, workdir)
+                        except Exception as exc:
+                            log_failure("h264 transcode", exc)
+                    tikwm_ok = True
+                except Exception as exc:
+                    log_failure("tikwm download", exc)
+                    # A signed CDN URL can expire between the info lookup and
+                    # the click. Resolve once more before using the fallback.
+                    if media_hint:
+                        fresh = tikwm_data(url)
+                        retry_url = tikwm_media(fresh, mode) if fresh else None
+                        if retry_url:
                             try:
-                                path = make_compatible_mp4(path, workdir)
+                                session = cffi_requests.Session(impersonate="chrome")
+                                content, content_type = fetch_media(retry_url, session)
+                                with open(path, "wb") as handle:
+                                    handle.write(content)
+                                meta = {
+                                    "title": fresh.get("title") or "tiktok",
+                                    "id": fresh.get("id") or "video",
+                                    "duration": fresh.get("duration"),
+                                }
+                                if mode == "video" and needs_transcode(path):
+                                    try:
+                                        path = make_compatible_mp4(path, workdir)
+                                    except Exception as exc:
+                                        log_failure("h264 transcode retry", exc)
+                                tikwm_ok = True
                             except Exception as exc:
-                                log_failure("h264 transcode", exc)
-                        tikwm_ok = True
-                    except Exception as exc:
-                        log_failure("tikwm download", exc)
+                                log_failure("tikwm download retry", exc)
 
             if not tikwm_ok:
                 variants = ydl_variants(

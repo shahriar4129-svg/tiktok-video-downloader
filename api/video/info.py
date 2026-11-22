@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "server"))
 
 import yt_dlp  # noqa: E402
 
-from tikwm import tikwm_data  # noqa: E402
+from tikwm import tikwm_data, tikwm_media  # noqa: E402
 
 from vercel_core import (  # noqa: E402
     cached_info,
@@ -95,6 +95,16 @@ def video_info(payload: dict, request: Request):
             # only known after download, so label it honestly as HD.
             "formats": [{"height": 720, "label": "HD", "ext": "mp4", "filesize": int(size)}],
             "variant": "tikwm",
+            # Hand the already-resolved CDN URLs to the download function. The
+            # backend returns them straight to the visitor instead of calling
+            # TikWM a second time, which is the main source of flaky failures.
+            "media": {
+                "video": tikwm_media(tikwm, "video"),
+                "audio": tikwm_media(tikwm, "mp3"),
+                "title": tikwm.get("title") or "tiktok",
+                "id": tikwm.get("id") or "video",
+                "duration": tikwm.get("duration"),
+            },
         }
         cache_info(url, result)
         return JSONResponse(result)
