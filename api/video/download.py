@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
 
@@ -109,7 +110,15 @@ def needs_transcode(path):
     return not video_stream_ok(info)
 
 
-def uniform_video_audio(path, donor_urls, workdir, primary_url=None):
+def fetch_donor_media(raw_url):
+    """Prefetch one alternate mirror while the main file is downloading."""
+    url = validate_media_url(raw_url)
+    session = cffi_requests.Session(impersonate="chrome") if cffi_requests else None
+    content, _ = fetch_media(url, session, timeout=8)
+    return url, content
+
+
+def uniform_video_audio(path, donor_urls, workdir, primary_url=None, donor_hint=None):
     """Give every saved MP4 the same HE-AACv2 audio without re-encoding.
 
     Most TikTok mirrors already carry HE-AACv2. A few (usually the clean
@@ -123,13 +132,27 @@ def uniform_video_audio(path, donor_urls, workdir, primary_url=None):
     if "he-aacv2" in probe_streams(path):
         return path
 
-    session = cffi_requests.Session(impersonate="chrome") if cffi_requests else None
+    candidates = []
+    tried = set()
+    if donor_hint and isinstance(donor_hint, tuple):
+        candidates.append(donor_hint)
+        tried.add(donor_hint[0])
     for index, raw in enumerate(donor_urls or []):
         if primary_url and raw == primary_url:
             continue
         try:
             url = validate_media_url(raw)
-            content, _ = fetch_media(url, session, timeout=8)
+        except (ValueError, TypeError):
+            continue
+        if url not in tried:
+            candidates.append((url, None))
+            tried.add(url)
+
+    session = cffi_requests.Session(impersonate="chrome") if cffi_requests else None
+    for index, (url, content) in enumerate(candidates):
+        try:
+            if content is None:
+                content, _ = fetch_media(url, session, timeout=8)
             donor = os.path.join(workdir, f"audio-donor-{index}.mp4")
             with open(donor, "wb") as handle:
                 handle.write(content)
@@ -340,7 +363,7 @@ def video_download(payload: dict, request: Request):
             path = os.path.join(workdir, "media" + extension)
             tikwm_ok = False
 
-            def save_media(content, source, donor_urls=None, primary=None):
+            def save_media(content, source, donor_urls=None, primary=None, donor_hint=None):
                 nonlocal path
                 with open(path, "wb") as handle:
                     handle.write(content)
@@ -355,15 +378,31 @@ def video_download(payload: dict, request: Request):
                             path = make_compatible_mp4(path, workdir)
                         except Exception as exc:
                             log_failure("h264 transcode", exc)
-                    path = uniform_video_audio(path, donor_urls, workdir, primary)
+                    path = uniform_video_audio(path, donor_urls, workdir, primary, donor_hint)
                 else:
                     path = make_real_mp3(path, workdir)
                 return meta
 
             if mirrors and cffi_requests is not None:
                 try:
-                    content, _content_type = fetch_media_raced(mirrors)
-                    meta = save_media(content, data, mirrors, primary_url)
+                    donor_hint = None
+                    alternate = next((m for m in mirrors if m != primary_url), None) if mode == "video" else None
+                    if alternate and FFMPEG:
+                        # The donor mirror is only needed when the main file has
+                        # AAC-LC audio, but fetching it while the main file is
+                        # still downloading keeps short and long videos on the
+                        # same four-second beat.
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            main_future = pool.submit(fetch_media_raced, mirrors)
+                            donor_future = pool.submit(fetch_donor_media, alternate)
+                            content, _content_type = main_future.result()
+                            try:
+                                donor_hint = donor_future.result()
+                            except Exception as exc:
+                                log_failure("audio donor prefetch", exc)
+                    else:
+                        content, _content_type = fetch_media_raced(mirrors)
+                    meta = save_media(content, data, mirrors, primary_url, donor_hint)
                     tikwm_ok = True
                 except Exception as exc:
                     log_failure("tikwm download", exc)
