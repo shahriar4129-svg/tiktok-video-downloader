@@ -574,10 +574,15 @@ def download_filename(meta, extension=".mp4"):
     keeps two posts with the same title apart, and the site name makes the file
     identifiable as one saved through this downloader. The extension (.mp4 for
     video, .mp3 for audio) already separates the two formats of the same post.
+    Titles are clipped by UTF-8 bytes, not characters, so a Bangla or emoji
+    title still fits under the 255-byte filesystem limit after the suffix.
     """
     source = meta if isinstance(meta, dict) else {}
     title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", str(source.get("title") or "")).strip()
-    title = re.sub(r"\s+", " ", title)[:70].strip(" .") or "tiktok-video"
+    title = re.sub(r"\s+", " ", title).strip(" .")
+    if len(title.encode("utf-8")) > 180:
+        title = title.encode("utf-8")[:180].decode("utf-8", "ignore").rstrip(" .")
+    title = title or "tiktok-video"
     video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(source.get("id") or ""))[:24]
     parts = [title]
     if video_id:
