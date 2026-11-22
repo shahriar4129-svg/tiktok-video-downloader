@@ -22,6 +22,7 @@ import threading
 import time
 from urllib.parse import urljoin, urlparse
 
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import yt_dlp
@@ -97,6 +98,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 def install_security_headers(app):
     app.add_middleware(SecurityHeadersMiddleware)
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception(request, exc):
+        # Never leak tracebacks to the browser. A structured JSON error lets
+        # the UI show a useful message instead of its generic fallback.
+        log_failure("unhandled API exception", exc)
+        return JSONResponse(
+            {"error": "This link could not be processed. Please try again."},
+            status_code=500,
+        )
 
 
 # Generous sliding-window limits — abuse/DoS dampener, not an auth control.
@@ -336,7 +347,7 @@ def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None):
         order.insert(0, preferred)
     # Fast metadata lookups retry only the two strongest paths. Downloads keep
     # the full second cycle for resilience when TikTok blocks intermittently.
-    order = order + (("app22", "app16") if fast else list(STRATEGIES))
+    order = order + (["app22", "app16"] if fast else list(STRATEGIES))
     return [ydl_options(outtmpl, name, mode, fast=fast) for name in order]
 
 
