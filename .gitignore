@@ -23,3 +23,5 @@ src/config/ads.js
 
 # Project docs kept local
 README.md
+
+.vercel
