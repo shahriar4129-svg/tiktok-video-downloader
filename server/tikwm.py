@@ -93,7 +93,11 @@ def tikwm_media_candidates(data, mode="video"):
     if mode == "mp3":
         raw = (data.get("music"), data.get("play"), data.get("wmplay"))
     else:
-        raw = (data.get("hdplay"), data.get("play"), data.get("wmplay"))
+        # TikWM's HD mirror is often HEVC, which forces a full H.264 re-encode
+        # (a 2-minute video took over a minute). Its standard `play` mirror is
+        # usually already H.264 and clean — try it first so every video saves
+        # at the same speed without a long transcode. HD stays as fallback.
+        raw = (data.get("play"), data.get("hdplay"), data.get("wmplay"))
     result = []
     for candidate in raw:
         if not isinstance(candidate, str) or not candidate.strip():
