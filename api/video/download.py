@@ -88,8 +88,10 @@ def needs_transcode(path):
         return True
     if "yuv420p" not in video and "yuvj420p" not in video:
         return True
+    # AAC is the safest audio codec inside MP4. Anything else (Opus, MP3,
+    # Vorbis, PCM) gets normalised too — some players reject those in MP4.
     for line in (line for line in info.splitlines() if "audio:" in line):
-        if "aac" not in line and "mp3" not in line:
+        if "aac" not in line:
             return True
     return False
 
@@ -103,7 +105,8 @@ def make_compatible_mp4(path, workdir):
         FFMPEG, "-y", "-loglevel", "error", "-i", path,
         "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
         "-crf", "23", "-pix_fmt", "yuv420p", "-tag:v", "avc1",
-        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output,
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart", output,
     ]
     subprocess.run(command, check=True, timeout=240, capture_output=True)
     os.remove(path)
