@@ -6,6 +6,7 @@ import BannerAd from './components/BannerAd.jsx'
 
 export default function App() {
   const [videoHasResult, setVideoHasResult] = useState(false)
+  const [toolKey, setToolKey] = useState(0)
   const [toast, setToast] = useState(null)
   const toastTimer = useRef(null)
 
@@ -14,7 +15,16 @@ export default function App() {
   function showToast(message, type = 'success') {
     clearTimeout(toastTimer.current)
     setToast({ message, type, id: Date.now() })
-    toastTimer.current = setTimeout(() => setToast(null), 2600)
+    toastTimer.current = setTimeout(() => setToast(null), 1600)
+  }
+
+  // Logo/brand is the home button: clear any result, reset the tool and jump
+  // back to the top — same as a refresh, without a slow full page reload.
+  function goHome() {
+    setVideoHasResult(false)
+    setToast(null)
+    setToolKey((value) => value + 1)
+    window.scrollTo({ top: 0, behavior: 'instant' })
   }
 
   return (
@@ -22,7 +32,13 @@ export default function App() {
       {/* Flat header */}
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-          <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={goHome}
+            title="Back to home"
+            aria-label="TikTok Video Downloader — back to home"
+            className="-ml-1 flex items-center gap-2.5 rounded-lg p-1 text-left transition hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+          >
             <span className="grid h-9 w-9 place-items-center rounded-lg ss-gradient shadow-sm">
               <Video className="h-5 w-5 text-white" strokeWidth={2.2} aria-hidden="true" />
             </span>
@@ -30,7 +46,7 @@ export default function App() {
               <h1 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">TikTok Video Downloader</h1>
               <p className="text-[10px] font-medium text-slate-500 sm:text-[11px]">Download TikTok videos in HD.</p>
             </div>
-          </div>
+          </button>
           <nav className="hidden items-center gap-5 text-[13px] font-semibold text-slate-600 md:flex" aria-label="Main">
             <a href="#tool" className="transition hover:text-teal-600">TikTok Downloader</a>
             <a href="#faq" className="transition hover:text-teal-600">FAQ</a>
@@ -63,7 +79,7 @@ export default function App() {
         <BannerAd slot="afterHero" />
 
         <div className="animate-panel-in motion-reduce:animate-none">
-          <VideoDownloader showToast={showToast} onResultStateChange={setVideoHasResult} />
+          <VideoDownloader key={toolKey} showToast={showToast} onResultStateChange={setVideoHasResult} />
         </div>
 
         <BannerAd slot="afterTool" />

@@ -31,9 +31,6 @@ const SAMPLE = '/sample-video.mp4'
 const TIKTOK_DEMO = 'https://www.tiktok.com/@therock/video/6829267836783971589'
 // Safety valve: never trap the visitor in the ad if a download stalls.
 const JOB_TIMEOUT_MS = 120000
-// The file is prepared before the ad opens. Bound that wait so a dead backend
-// shows an error instead of freezing the option button forever.
-const PREP_TIMEOUT_MS = 60000
 
 const FAQS = [
   {
@@ -194,10 +191,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const [jobPending, setJobPending] = useState(false)
   const jobPendingRef = useRef(false)
   const [opening, setOpening] = useState(false)
-  // While a chosen format is being prepared (before the ad opens) the option
-  // shows a spinner. Once the Blob exists the ad is a fixed four-second beat.
-  const [preparingOption, setPreparingOption] = useState('')
-  const preparingRef = useRef('')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewSrc, setPreviewSrc] = useState('')
   const [previewIsVideo, setPreviewIsVideo] = useState(false)
@@ -233,7 +226,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         if (signal?.aborted || cause?.name === 'AbortError') throw cause
         lastError = cause
       }
-      if (i < attempts - 1) await wait(500 * (i + 1))
+      if (i < attempts - 1) await wait(150 * (i + 1))
     }
     throw lastError
   }
@@ -261,7 +254,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       } catch (cause) {
         if (signal?.aborted || cause?.name === 'AbortError') throw cause
         lastError = cause
-        if (i < 2) await wait(500 * (i + 1))
+        if (i < 2) await wait(150 * (i + 1))
         continue
       }
       if (response.ok) {
@@ -278,7 +271,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       const body = await response.json().catch(() => ({}))
       lastError = new Error(body.error || `Request failed (${response.status})`)
       if (signal?.aborted || (response.status < 500 && !RETRYABLE.test(body.error || ''))) break
-      if (i < 2) await wait(500 * (i + 1))
+      if (i < 2) await wait(150 * (i + 1))
     }
     throw lastError
   }
@@ -502,9 +495,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
   useEffect(() => {
     if (state !== 'idle') return undefined
-    // Paste calls prefetchInfo directly (instant). Typing is debounced so a
-    // half-written link cannot start a dozen lookups and file preparations.
-    const timer = window.setTimeout(() => prefetchInfo(url, mode), 250)
+    // Paste calls prefetchInfo directly (instant). Typing is debounced just
+    // enough to skip half-written links without delaying a completed paste.
+    const timer = window.setTimeout(() => prefetchInfo(url, mode), 80)
     return () => window.clearTimeout(timer)
   }, [url, mode, state])
 
@@ -541,14 +534,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   // to push the heading off the top of the screen.
   useEffect(() => {
     if (state !== 'social' && state !== 'direct' && state !== 'ready') return
-    // A short delay lets any focus/scroll already in flight settle first.
     const timer = window.setTimeout(() => {
       const target = resultPanelRef.current
       if (!target) return
       const box = target.getBoundingClientRect()
       const block = box.height > window.innerHeight - 24 ? 'start' : 'center'
       target.scrollIntoView({ behavior: 'instant', block })
-    }, 250)
+    }, 0)
     return () => window.clearTimeout(timer)
   }, [state])
 
@@ -564,8 +556,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
     jobPendingRef.current = false
     setJobPending(false)
-    preparingRef.current = ''
-    setPreparingOption('')
     setOpening(false)
     replaceBlobUrl(null)
     blobRef.current = null
@@ -666,27 +656,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         if (!body) {
           body = await postJsonWithRetry('/api/video/info', { url: result.url, mode })
         }
+        setOpening(false)
         setRemoteInfo(body)
         if (body.variant) variantRef.current = body.variant
         rememberLink(result.url)
-        // Start (or reuse) the file warm-up and wait for it before showing the
-        // options. Every video then follows the same fixed process: the file is
-        // already complete when an option is tapped, so the ad opens instantly
-        // and Close always lands on the four-second beat — never five.
-        const warm = prefetchBlobs(result.url, mode, body.media)
-        if (warm) {
-          try {
-            await Promise.race([
-              warm,
-              wait(PREP_TIMEOUT_MS).then(() => {
-                throw new Error('The download is taking too long. Please try again.')
-              }),
-            ])
-          } catch {
-            // Let the option click retry and surface the real error.
-          }
-        }
-        setOpening(false)
+        // Keep warming in the background — options appear instantly. The file
+        // is reused by the option click, so the ad never waits for a second
+        // download and the close beat stays fixed at four seconds.
+        prefetchBlobs(result.url, mode, body.media)
 
         // Show the thumbnail plus the exact formats this video offers.
         const heights = (body.formats || [])
@@ -802,43 +779,21 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     return null
   }
 
-  // Prepare the file BEFORE the ad opens. That makes every video follow the
-  // same fixed process: the Blob is already complete inside the ad, so Close
-  // always appears on the four-second beat and never drifts to five seconds
-  // on a cold start or a slow CDN. The paste-time warm-up is reused here, so
-  // there is never a second download.
-  async function handleSaveOption(kind) {
-    if (downloadJobRef.current || preparingRef.current || !info) return
-    preparingRef.current = kind
-    setPreparingOption(kind)
-
-    try {
-      let job
-      if (kind === 'direct') job = fetchDirectBlob(info)
-      else if (kind === 'sd') job = warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video' })
-      else if (kind === 'mp3') job = warmJob(kind) || fetchSocialBlob({ mode: 'mp3' })
-      else if (kind === 'story') job = fetchSocialBlob({ mode: 'story', storyId })
-      else job = warmJob('hd') || fetchSocialBlob({ quality, mode: 'video' })
-
-      // A resolved job means jobPending clears on the next microtask, so the
-      // ad opens with Close guarantee-ready and only its timer is left.
-      const prepared = await Promise.race([
-        job,
-        wait(PREP_TIMEOUT_MS).then(() => {
-          throw new Error('The download is taking too long. Please try again.')
-        }),
-      ])
-      if (preparingRef.current !== kind) return
-      startJob(Promise.resolve(prepared), kind)
-    } catch (cause) {
-      if (preparingRef.current !== kind) return
-      setError(cause.message || 'Download failed.')
-      if (state !== 'error') setState('error')
-    } finally {
-      if (preparingRef.current === kind) {
-        preparingRef.current = ''
-        setPreparingOption('')
-      }
+  // Option tap starts the already-warmed job and the ad in the same tick —
+  // no waiting before the ad. The file keeps preparing behind the ad and the
+  // Close control only appears once it is complete.
+  function handleSaveOption(kind) {
+    if (downloadJobRef.current || !info) return
+    if (kind === 'direct') {
+      startJob(fetchDirectBlob(info), 'direct')
+    } else if (kind === 'sd') {
+      startJob(warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video' }), 'social')
+    } else if (kind === 'mp3') {
+      startJob(warmJob(kind) || fetchSocialBlob({ mode: 'mp3' }), 'social')
+    } else if (kind === 'story') {
+      startJob(fetchSocialBlob({ mode: 'story', storyId }), 'social')
+    } else {
+      startJob(warmJob('hd') || fetchSocialBlob({ quality, mode: 'video' }), 'social')
     }
   }
 
@@ -896,17 +851,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const sdOption = qualityOptions.find((item) => item.value !== selectedQuality?.value) || null
   const sdQuality = sdOption?.value || selectedQuality?.value || quality
 
-  // One shared label so every option shows the same "preparing" state while
-  // its file is being readied before the ad.
-  function optionContent(kind, label, meta) {
-    if (preparingOption === kind) {
-      return (
-        <span className="flex items-center gap-2 text-xs font-bold text-white">
-          <Loader2 className="h-4 w-4 animate-spin text-white" aria-hidden="true" />
-          Preparing your file…
-        </span>
-      )
-    }
+  // One shared label keeps every option identical and avoids duplicate markup.
+  function optionContent(label, meta) {
     return (
       <>
         <span className="flex items-center gap-2 text-xs font-bold text-white">
@@ -1228,12 +1174,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                     <>
                       <button
                         type="button"
-                        disabled={Boolean(preparingOption)}
-                        onClick={() => handleSaveOption('hd')}
+                                                onClick={() => handleSaveOption('hd')}
                         className={OPTION_CLASS}
                       >
                         {optionContent(
-                          'hd',
                           'Without watermark HD',
                           `${selectedQuality?.label || ''}${selectedQuality?.size > 0 ? ` · ${formatBytes(selectedQuality.size)}` : ''}`,
                         )}
@@ -1241,12 +1185,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                       {sdOption && (
                         <button
                           type="button"
-                          disabled={Boolean(preparingOption)}
-                          onClick={() => handleSaveOption('sd')}
+                                                    onClick={() => handleSaveOption('sd')}
                           className={OPTION_CLASS}
                         >
                           {optionContent(
-                            'sd',
                             'Without watermark',
                             `${sdOption.label}${sdOption.size > 0 ? ` · ${formatBytes(sdOption.size)}` : ''}`,
                           )}
@@ -1254,32 +1196,30 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                       )}
                       <button
                         type="button"
-                        disabled={Boolean(preparingOption)}
-                        onClick={() => handleSaveOption('mp3')}
+                                                onClick={() => handleSaveOption('mp3')}
                         className={OPTION_CLASS}
                       >
-                        {optionContent('mp3', 'Download MP3', '192 kbps')}
+                        {optionContent('Download MP3', '192 kbps')}
                       </button>
                     </>
                   )}
                   {mode === 'mp3' && (
                     <button
                       type="button"
-                      disabled={Boolean(preparingOption)}
-                      onClick={() => handleSaveOption('mp3')}
+                                            onClick={() => handleSaveOption('mp3')}
                       className={OPTION_CLASS}
                     >
-                      {optionContent('mp3', 'Download MP3', '192 kbps')}
+                      {optionContent('Download MP3', '192 kbps')}
                     </button>
                   )}
                   {mode === 'story' && (
                     <button
                       type="button"
-                      disabled={!storyId || Boolean(preparingOption)}
+                      disabled={!storyId}
                       onClick={() => handleSaveOption('story')}
                       className={OPTION_CLASS}
                     >
-                      {optionContent('story', 'Download Story', 'MP4')}
+                      {optionContent('Download Story', 'MP4')}
                     </button>
                   )}
                 </div>
@@ -1299,11 +1239,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               <div className="mt-5 space-y-2">
                 <button
                   type="button"
-                  disabled={Boolean(preparingOption)}
-                  onClick={() => handleSaveOption('direct')}
+                                    onClick={() => handleSaveOption('direct')}
                   className={OPTION_CLASS}
                 >
-                  {optionContent('direct', 'Save file', 'Original file')}
+                  {optionContent('Save file', 'Original file')}
                 </button>
               </div>
             </div>

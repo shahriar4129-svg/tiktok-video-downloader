@@ -136,7 +136,8 @@ def make_compatible_mp4(path, workdir):
     command = [
         FFMPEG, "-y", "-loglevel", "error", "-i", path,
         *video_args,
-        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        # Source is already 48 kHz stereo; re-sampling only adds delay.
+        "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart", output,
     ]
     subprocess.run(command, check=True, timeout=240, capture_output=True)
