@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / "server"))
 
 import yt_dlp  # noqa: E402
 
+from tikwm import tikwm_data  # noqa: E402
+
 from vercel_core import (  # noqa: E402
     cached_info,
     cache_info,
@@ -76,6 +78,24 @@ def video_info(payload: dict, request: Request):
                 {"error": with_hint("Could not load stories.", error_category(exc))},
                 status_code=400,
             )
+
+    # Cloud IPs are blocked by TikTok, so resolve metadata through TikWM
+    # first. yt-dlp remains the fallback if that service is unavailable.
+    tikwm = tikwm_data(url)
+    if tikwm:
+        author = tikwm.get("author") or {}
+        size = tikwm.get("hd_size") or tikwm.get("size") or 0
+        result = {
+            "title": tikwm.get("title") or "video",
+            "duration": tikwm.get("duration"),
+            "thumbnail": tikwm.get("cover") or tikwm.get("origin_cover"),
+            "uploader": f"@{author.get('unique_id')}" if author.get("unique_id") else None,
+            "platform": "TikTok",
+            "formats": [{"height": 720, "ext": "mp4", "filesize": int(size)}],
+            "variant": "tikwm",
+        }
+        cache_info(url, result)
+        return JSONResponse(result)
 
     last_error = None
     for attempt, options in enumerate(ydl_variants(fast=True), start=1):

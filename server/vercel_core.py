@@ -54,8 +54,9 @@ TIKTOK_HOSTS = ("tiktok.com", "vtiktok.com")
 # Story thumbnails/media come from TikTok's own CDNs. Nothing else may be
 # fetched by the download endpoint — this is the SSRF boundary.
 MEDIA_HOSTS = (
-    "tiktok.com", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokv.com",
-    "byteimg.com", "byteimg.net", "musical.ly",
+    "tiktok.com", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com",
+    "tiktokcdn-apac.com", "tiktokv.com", "byteimg.com", "byteimg.net",
+    "musical.ly",
 )
 SAFE_EXTENSIONS = (".mp4", ".mp3", ".webm", ".ogg", ".m4a", ".mkv", ".jpg", ".jpeg", ".png")
 ENV_COOKIE_FILE = os.path.join(tempfile.gettempdir(), "tiktok-video-downloader-cookies.txt")

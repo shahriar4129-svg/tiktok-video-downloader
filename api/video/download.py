@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT / "server"))
 
 import yt_dlp  # noqa: E402
 
+from tikwm import tikwm_data, tikwm_media  # noqa: E402
+
 from vercel_core import (  # noqa: E402
     FFMPEG,
     MAX_BYTES,
@@ -218,43 +220,72 @@ def video_download(payload: dict, request: Request):
                 handle.write(content)
             meta = {"title": f"tiktok-story-{story_id}", "id": story_id}
         else:
-            variants = ydl_variants(
-                os.path.join(workdir, "%(id)s.%(ext)s"),
-                mode,
-                preferred=payload.get("variant"),
-            )
-            for attempt, options in enumerate(variants, start=1):
-                # Remove partial files left by a failed strategy before retrying.
-                for leftover in glob.glob(os.path.join(workdir, "*")):
-                    if os.path.isfile(leftover):
-                        os.remove(leftover)
-
-                if mode != "mp3":
-                    options["format"] = video_format
-                options["merge_output_format"] = "mp4"
-                try:
-                    with yt_dlp.YoutubeDL(options) as ydl:
-                        meta = ydl.extract_info(url, download=True)
-                        path = locate_download(workdir, ydl, meta, mode)
-                    if path:
+            # TikTok blocks Vercel's IPs directly, so try the public metadata
+            # service first and stream its CDN URL. yt-dlp is the fallback.
+            tikwm_ok = False
+            tikwm = tikwm_data(url)
+            if tikwm:
+                media_url = tikwm_media(tikwm, mode)
+                if media_url and cffi_requests is not None:
+                    try:
+                        session = cffi_requests.Session(impersonate="chrome")
+                        content, content_type = fetch_media(media_url, session)
+                        extension = ".mp3" if mode == "mp3" else ".mp4"
+                        path = os.path.join(workdir, "media" + extension)
+                        with open(path, "wb") as handle:
+                            handle.write(content)
+                        meta = {
+                            "title": tikwm.get("title") or "tiktok",
+                            "id": tikwm.get("id") or "video",
+                            "duration": tikwm.get("duration"),
+                        }
                         if mode == "video" and needs_transcode(path):
                             try:
                                 path = make_compatible_mp4(path, workdir)
                             except Exception as exc:
-                                # Keep the original file if re-encoding is not
-                                # possible — a playable source beats no file.
                                 log_failure("h264 transcode", exc)
-                        break
-                    last_error = RuntimeError("Downloaded file was not found.")
-                except Exception as exc:
-                    last_error = exc
-                    log_failure(f"video/download attempt {attempt}", exc)
-            else:
-                shutil.rmtree(workdir, ignore_errors=True)
-                return JSONResponse(
-                    {"error": with_hint("Download failed.", error_category(last_error))},
-                    status_code=400,
+                        tikwm_ok = True
+                    except Exception as exc:
+                        log_failure("tikwm download", exc)
+
+            if not tikwm_ok:
+                variants = ydl_variants(
+                    os.path.join(workdir, "%(id)s.%(ext)s"),
+                    mode,
+                    preferred=payload.get("variant"),
                 )
+                for attempt, options in enumerate(variants, start=1):
+                    # Remove partial files left by a failed strategy before retrying.
+                    for leftover in glob.glob(os.path.join(workdir, "*")):
+                        if os.path.isfile(leftover):
+                            os.remove(leftover)
+
+                    if mode != "mp3":
+                        options["format"] = video_format
+                    options["merge_output_format"] = "mp4"
+                    try:
+                        with yt_dlp.YoutubeDL(options) as ydl:
+                            meta = ydl.extract_info(url, download=True)
+                            path = locate_download(workdir, ydl, meta, mode)
+                        if path:
+                            if mode == "video" and needs_transcode(path):
+                                try:
+                                    path = make_compatible_mp4(path, workdir)
+                                except Exception as exc:
+                                    # Keep the original file if re-encoding is
+                                    # not possible — a file beats no file.
+                                    log_failure("h264 transcode", exc)
+                            break
+                        last_error = RuntimeError("Downloaded file was not found.")
+                    except Exception as exc:
+                        last_error = exc
+                        log_failure(f"video/download attempt {attempt}", exc)
+                else:
+                    shutil.rmtree(workdir, ignore_errors=True)
+                    return JSONResponse(
+                        {"error": with_hint("Download failed.", error_category(last_error))},
+                        status_code=400,
+                    )
 
         store_file(cache_key, path, meta, os.path.getsize(path))
         return stream_file(path, meta, workdir)
