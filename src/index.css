@@ -105,3 +105,87 @@
 .animate-panel-in {
   animation: panel-in 260ms ease-out both;
 }
+
+/* Small, deliberate motion. Each piece settles in under 400 ms so it never
+   competes with the four-second ad beat. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise-in {
+  animation: rise-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes option-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-option-in {
+  animation: option-in 200ms ease-out both;
+}
+
+@keyframes preview-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-preview-in {
+  animation: preview-in 320ms ease-out both;
+}
+
+@keyframes ad-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-ad-backdrop-in {
+  animation: ad-backdrop-in 180ms ease-out both;
+}
+
+@keyframes ad-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-ad-card-in {
+  animation: ad-card-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise-in,
+  .animate-option-in,
+  .animate-preview-in,
+  .animate-ad-backdrop-in,
+  .animate-ad-card-in,
+  .animate-ad-close-in,
+  .animate-toast-in,
+  .animate-panel-in {
+    animation: none !important;
+  }
+}

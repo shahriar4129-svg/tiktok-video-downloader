@@ -113,7 +113,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
 
   const modal = (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 p-3 backdrop-blur-sm sm:p-4"
+      className="animate-ad-backdrop-in fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 p-3 backdrop-blur-sm motion-reduce:animate-none sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Advertisement"
@@ -121,7 +121,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
         if (canClose && event.target === event.currentTarget) onClose()
       }}
     >
-      <div className="relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
+      <div className="animate-ad-card-in relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl motion-reduce:animate-none sm:max-h-[calc(100dvh-2rem)]">
         {readyToClose && (
           <button
             type="button"
@@ -129,7 +129,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
             aria-disabled={!canClose}
             title={canClose ? undefined : 'Preparing your file…'}
             onClick={handleClose}
-            className="animate-ad-close-in absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-800 shadow-lg ring-1 ring-slate-200 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-75 disabled:hover:bg-white disabled:hover:text-slate-800 sm:right-4 sm:top-4 sm:gap-1.5 sm:px-3.5 sm:py-2 sm:text-xs"
+            className="animate-ad-close-in absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-800 shadow-lg ring-1 ring-slate-200 transition hover:bg-teal-50 hover:text-teal-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-75 disabled:hover:bg-white disabled:hover:text-slate-800 sm:right-4 sm:top-4 sm:gap-1.5 sm:px-3.5 sm:py-2 sm:text-xs"
           >
             <X className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             {config.closeLabel || 'Close'}
@@ -182,7 +182,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
               type="button"
               disabled={!canClose}
               onClick={handleClose}
-              className="text-[11px] font-semibold text-slate-600 underline decoration-slate-300 underline-offset-2 transition hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-75 disabled:no-underline"
+              className="text-[11px] font-semibold text-slate-600 underline decoration-slate-300 underline-offset-2 transition hover:text-teal-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-75 disabled:no-underline"
             >
               Remove ads
             </button>

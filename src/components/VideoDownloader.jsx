@@ -89,10 +89,10 @@ const FALLBACK_QUALITIES = [
 ]
 
 const CHIP_CLASS =
-  'rounded-md bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-inset ring-white/30 transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white'
+  'rounded-md bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-inset ring-white/30 transition hover:bg-white/25 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white'
 
 const OPTION_CLASS =
-  'flex w-full items-center justify-center gap-3 rounded-lg ss-gradient px-4 py-3 text-center text-white shadow-md shadow-teal-500/20 transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 disabled:cursor-not-allowed disabled:opacity-50'
+  'flex w-full items-center justify-center gap-3 rounded-lg ss-gradient px-4 py-3 text-center text-white shadow-md shadow-teal-500/20 transition hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 disabled:cursor-not-allowed disabled:opacity-50'
 
 function AdBadge() {
   return ADS.enabled && ADS.vignette?.enabled && ADS.vignette?.showBadge ? (
@@ -870,15 +870,25 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       {state === 'idle' && (
       <section className="ss-gradient rounded-2xl px-5 py-8 text-white shadow-lg shadow-teal-500/20 sm:px-10 sm:py-10">
         <div className="mx-auto max-w-3xl text-center">
-          <h2 className="text-2xl font-extrabold tracking-tight text-white sm:text-[32px]">
+          <h2
+            className="animate-rise-in text-2xl font-extrabold tracking-tight text-white sm:text-[32px] motion-reduce:animate-none"
+            style={{ animationDelay: '60ms' }}
+          >
             TikTok Video Downloader
           </h2>
-          <p className="mt-2 text-sm leading-relaxed text-white/80">
+          <p
+            className="animate-rise-in mt-2 text-sm leading-relaxed text-white/80 motion-reduce:animate-none"
+            style={{ animationDelay: '130ms' }}
+          >
             Download TikTok videos without watermark. Paste a link, choose a format and save it in seconds.
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="mx-auto mt-6 max-w-3xl">
+        <form
+          onSubmit={handleSubmit}
+          className="animate-rise-in mx-auto mt-6 max-w-3xl motion-reduce:animate-none"
+          style={{ animationDelay: '200ms' }}
+        >
           <div className="flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">
               <Link2
@@ -923,7 +933,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             <button
               type="submit"
               disabled={state === 'analyzing' || opening}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0d9488] px-6 py-4 text-base font-semibold text-white shadow-lg shadow-teal-900/20 transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:min-w-[9rem]"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0d9488] px-6 py-4 text-base font-semibold text-white shadow-lg shadow-teal-900/20 transition hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:min-w-[9rem]"
             >
               {state === 'analyzing' || opening ? (
                 <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
@@ -974,7 +984,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           </div>
         </form>
 
-        <div className="mx-auto mt-5 grid max-w-3xl gap-2 sm:grid-cols-3">
+        <div
+          className="animate-rise-in mx-auto mt-5 grid max-w-3xl gap-2 sm:grid-cols-3 motion-reduce:animate-none"
+          style={{ animationDelay: '260ms' }}
+        >
           <MiniBenefit>Unlimited saves</MiniBenefit>
           <MiniBenefit>No watermark</MiniBenefit>
           <MiniBenefit>HD quality</MiniBenefit>
@@ -983,7 +996,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           <MiniBenefit>Fast &amp; free</MiniBenefit>
         </div>
 
-        <div className="mx-auto mt-4 flex max-w-3xl flex-wrap items-center justify-center gap-2">
+        <div
+          className="animate-rise-in mx-auto mt-4 flex max-w-3xl flex-wrap items-center justify-center gap-2 motion-reduce:animate-none"
+          style={{ animationDelay: '320ms' }}
+        >
           <span className="text-[11px] font-semibold uppercase tracking-wider text-white/70">Try</span>
           <button type="button" onClick={() => setUrl(SAMPLE)} className={CHIP_CLASS}>
             Sample MP4
@@ -1014,7 +1030,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           {state === 'analyzing' && (
             <div className="w-full max-w-sm">
               <Loader2 className="mx-auto h-8 w-8 animate-spin text-teal-600" aria-hidden="true" />
-              <p className="mt-3 text-xs font-semibold text-slate-600">Opening your formats…</p>
+              <p className="mt-3 animate-pulse text-xs font-semibold text-slate-600 motion-reduce:animate-none">
+                Opening your formats…
+              </p>
             </div>
           )}
 
@@ -1058,7 +1076,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                   <img
                     src={remoteInfo.thumbnail}
                     alt=""
-                    className="mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg sm:mx-0"
+                    className="animate-preview-in mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg motion-reduce:animate-none sm:mx-0"
                   />
                   <button
                     type="button"
@@ -1097,13 +1115,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                     Available qualities
                   </p>
                   <div role="group" aria-label="Video quality" className="space-y-2">
-                    {qualityOptions.map((item) => (
+                    {qualityOptions.map((item, index) => (
                       <button
                         key={item.value}
                         type="button"
                         aria-pressed={quality === item.value}
                         onClick={() => setQuality(item.value)}
-                        className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[11px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                        style={{ animationDelay: `${index * 45}ms` }}
+                        className={`animate-option-in flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[11px] font-bold transition active:scale-[0.99] motion-reduce:animate-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                           quality === item.value
                             ? 'border-teal-400/50 bg-teal-500/15 text-slate-900 shadow-sm'
                             : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-teal-400/40 hover:text-slate-900'
@@ -1174,8 +1193,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                     <>
                       <button
                         type="button"
-                                                onClick={() => handleSaveOption('hd')}
-                        className={OPTION_CLASS}
+                        onClick={() => handleSaveOption('hd')}
+                        style={{ animationDelay: '30ms' }}
+                        className={`${OPTION_CLASS} animate-option-in motion-reduce:animate-none`}
                       >
                         {optionContent(
                           'Without watermark HD',
@@ -1185,8 +1205,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                       {sdOption && (
                         <button
                           type="button"
-                                                    onClick={() => handleSaveOption('sd')}
-                          className={OPTION_CLASS}
+                          onClick={() => handleSaveOption('sd')}
+                          style={{ animationDelay: '90ms' }}
+                          className={`${OPTION_CLASS} animate-option-in motion-reduce:animate-none`}
                         >
                           {optionContent(
                             'Without watermark',
@@ -1196,8 +1217,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                       )}
                       <button
                         type="button"
-                                                onClick={() => handleSaveOption('mp3')}
-                        className={OPTION_CLASS}
+                        onClick={() => handleSaveOption('mp3')}
+                        style={{ animationDelay: '150ms' }}
+                        className={`${OPTION_CLASS} animate-option-in motion-reduce:animate-none`}
                       >
                         {optionContent('Download MP3', '192 kbps')}
                       </button>
@@ -1206,8 +1228,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                   {mode === 'mp3' && (
                     <button
                       type="button"
-                                            onClick={() => handleSaveOption('mp3')}
-                      className={OPTION_CLASS}
+                      onClick={() => handleSaveOption('mp3')}
+                      style={{ animationDelay: '60ms' }}
+                      className={`${OPTION_CLASS} animate-option-in motion-reduce:animate-none`}
                     >
                       {optionContent('Download MP3', '192 kbps')}
                     </button>
@@ -1217,7 +1240,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                       type="button"
                       disabled={!storyId}
                       onClick={() => handleSaveOption('story')}
-                      className={OPTION_CLASS}
+                      style={{ animationDelay: '60ms' }}
+                      className={`${OPTION_CLASS} animate-option-in motion-reduce:animate-none`}
                     >
                       {optionContent('Download Story', 'MP4')}
                     </button>
@@ -1239,8 +1263,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               <div className="mt-5 space-y-2">
                 <button
                   type="button"
-                                    onClick={() => handleSaveOption('direct')}
-                  className={OPTION_CLASS}
+                  onClick={() => handleSaveOption('direct')}
+                  style={{ animationDelay: '60ms' }}
+                  className={`${OPTION_CLASS} animate-option-in motion-reduce:animate-none`}
                 >
                   {optionContent('Save file', 'Original file')}
                 </button>

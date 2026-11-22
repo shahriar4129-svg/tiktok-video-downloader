@@ -63,14 +63,20 @@ export default function App() {
       <main id="tool" className="mx-auto max-w-6xl px-4 pb-16 sm:px-6">
         {!videoHasResult && (
           <div className="mb-6 max-w-2xl">
-            <h2 className="text-3xl font-extrabold leading-tight tracking-tight text-slate-900 sm:text-4xl">
+            <h2
+              className="animate-rise-in text-3xl font-extrabold leading-tight tracking-tight text-slate-900 sm:text-4xl motion-reduce:animate-none"
+              style={{ animationDelay: '40ms' }}
+            >
               Download TikTok videos in{' '}
               <span className="bg-gradient-to-r from-[#0d9488] to-[#14b8a6] bg-clip-text text-transparent">
                 HD
               </span>{' '}
               without the fuss
             </h2>
-            <p className="mt-3 text-sm leading-relaxed text-slate-500 sm:text-base">
+            <p
+              className="animate-rise-in mt-3 text-sm leading-relaxed text-slate-500 sm:text-base motion-reduce:animate-none"
+              style={{ animationDelay: '110ms' }}
+            >
               Paste a link — save as MP4, MP3 or Story. No login needed.
             </p>
           </div>
