@@ -91,14 +91,6 @@ def video_stream_ok(info):
     return "yuv420p" in video or "yuvj420p" in video
 
 
-def audio_stream_ok(info):
-    """True when every audio track is AAC-LC (HE-AAC is not universal)."""
-    for line in (line for line in info.splitlines() if "audio:" in line):
-        if "aac" not in line or "he-aac" in line:
-            return False
-    return True
-
-
 def needs_transcode(path):
     """Only re-encode when the *video* track cannot play everywhere.
 
@@ -115,6 +107,69 @@ def needs_transcode(path):
     if not info:
         return True
     return not video_stream_ok(info)
+
+
+def uniform_video_audio(path, donor_urls, workdir, primary_url=None):
+    """Give every saved MP4 the same HE-AACv2 audio without re-encoding.
+
+    Most TikTok mirrors already carry HE-AACv2. A few (usually the clean
+    `play` mirror of an older post) carry AAC-LC instead. Rather than spend
+    20+ seconds re-encoding the audio of a ten-minute video, borrow the audio
+    track from another mirror of the *same post* and stream-copy it beside the
+    playable H.264 video. The mux itself takes about 200 ms.
+    """
+    if not FFMPEG:
+        return path
+    if "he-aacv2" in probe_streams(path):
+        return path
+
+    session = cffi_requests.Session(impersonate="chrome") if cffi_requests else None
+    for index, raw in enumerate(donor_urls or []):
+        if primary_url and raw == primary_url:
+            continue
+        try:
+            url = validate_media_url(raw)
+            content, _ = fetch_media(url, session, timeout=8)
+            donor = os.path.join(workdir, f"audio-donor-{index}.mp4")
+            with open(donor, "wb") as handle:
+                handle.write(content)
+            if "he-aacv2" not in probe_streams(donor):
+                continue
+            output = os.path.join(workdir, "uniform-audio.mp4")
+            command = [
+                FFMPEG, "-y", "-loglevel", "error", "-i", path, "-i", donor,
+                "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+                "-movflags", "+faststart", output,
+            ]
+            subprocess.run(command, check=True, timeout=90, capture_output=True)
+            return output
+        except Exception as exc:
+            log_failure("uniform video audio", exc)
+    return path
+
+
+def make_real_mp3(path, workdir):
+    """Ensure the saved .mp3 really is MP3, not a mislabeled AAC stream.
+
+    TikWM's music URL is usually MP3, but for some posts it returns a 64 kb/s
+    AAC file with an audio/mp4 content type. Encoding that short track to MP3
+    is cheap; already-MP3 sources are copied untouched.
+    """
+    if not FFMPEG:
+        return path
+    if "audio: mp3" in probe_streams(path):
+        return path
+    output = os.path.join(workdir, "audio.mp3")
+    try:
+        command = [
+            FFMPEG, "-y", "-loglevel", "error", "-i", path, "-vn",
+            "-codec:a", "libmp3lame", "-b:a", "128k", output,
+        ]
+        subprocess.run(command, check=True, timeout=120, capture_output=True)
+        return output
+    except Exception as exc:
+        log_failure("mp3 normalize", exc)
+        return path
 
 
 def make_compatible_mp4(path, workdir):
@@ -267,10 +322,11 @@ def video_download(payload: dict, request: Request):
             mirror_key = "audio_alternates" if mode == "mp3" else "video_alternates"
             mirrors = list(resolved.get(mirror_key) or [])
             raw_media = resolved.get("audio") if mode == "mp3" else resolved.get("video")
+            primary_url = None
             if isinstance(raw_media, str) and raw_media.strip():
                 try:
-                    primary = validate_media_url(raw_media)
-                    mirrors = [primary] + [item for item in mirrors if item != primary]
+                    primary_url = validate_media_url(raw_media)
+                    mirrors = [primary_url] + [item for item in mirrors if item != primary_url]
                 except (ValueError, TypeError) as exc:
                     log_failure("media hint", exc)
 
@@ -284,7 +340,7 @@ def video_download(payload: dict, request: Request):
             path = os.path.join(workdir, "media" + extension)
             tikwm_ok = False
 
-            def save_media(content, source):
+            def save_media(content, source, donor_urls=None, primary=None):
                 nonlocal path
                 with open(path, "wb") as handle:
                     handle.write(content)
@@ -293,17 +349,21 @@ def video_download(payload: dict, request: Request):
                     "id": (source or {}).get("id") or "video",
                     "duration": (source or {}).get("duration"),
                 }
-                if mode == "video" and needs_transcode(path):
-                    try:
-                        path = make_compatible_mp4(path, workdir)
-                    except Exception as exc:
-                        log_failure("h264 transcode", exc)
+                if mode == "video":
+                    if needs_transcode(path):
+                        try:
+                            path = make_compatible_mp4(path, workdir)
+                        except Exception as exc:
+                            log_failure("h264 transcode", exc)
+                    path = uniform_video_audio(path, donor_urls, workdir, primary)
+                else:
+                    path = make_real_mp3(path, workdir)
                 return meta
 
             if mirrors and cffi_requests is not None:
                 try:
                     content, _content_type = fetch_media_raced(mirrors)
-                    meta = save_media(content, data)
+                    meta = save_media(content, data, mirrors, primary_url)
                     tikwm_ok = True
                 except Exception as exc:
                     log_failure("tikwm download", exc)
@@ -314,7 +374,7 @@ def video_download(payload: dict, request: Request):
                     if retry_urls:
                         try:
                             content, _content_type = fetch_media_raced(retry_urls)
-                            meta = save_media(content, fresh)
+                            meta = save_media(content, fresh, retry_urls)
                             tikwm_ok = True
                         except Exception as exc:
                             log_failure("tikwm download retry", exc)
@@ -341,13 +401,17 @@ def video_download(payload: dict, request: Request):
                             meta = ydl.extract_info(url, download=True)
                             path = locate_download(workdir, ydl, meta, mode)
                         if path:
-                            if mode == "video" and needs_transcode(path):
-                                try:
-                                    path = make_compatible_mp4(path, workdir)
-                                except Exception as exc:
-                                    # Keep the original file if re-encoding is
-                                    # not possible — a file beats no file.
-                                    log_failure("h264 transcode", exc)
+                            if mode == "video":
+                                if needs_transcode(path):
+                                    try:
+                                        path = make_compatible_mp4(path, workdir)
+                                    except Exception as exc:
+                                        # Keep the original file if re-encoding is
+                                        # not possible — a file beats no file.
+                                        log_failure("h264 transcode", exc)
+                                path = uniform_video_audio(path, [], workdir)
+                            else:
+                                path = make_real_mp3(path, workdir)
                             break
                         last_error = RuntimeError("Downloaded file was not found.")
                     except Exception as exc:
