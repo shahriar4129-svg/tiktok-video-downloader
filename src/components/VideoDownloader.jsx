@@ -174,7 +174,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const prefetchAbortRef = useRef(null)
   const prefetchKeyRef = useRef('')
   const prefetchPromiseRef = useRef(null)
-  const lookupTokenRef = useRef(0)
   // Prepared files are cached here so no work is left when the ad opens: the
   // download starts when the link appears, not when the visitor taps a format.
   const blobCacheRef = useRef(new Map())
@@ -551,7 +550,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   }, [state, onResultStateChange])
 
   function clearResult() {
-    lookupTokenRef.current += 1
     if (downloadJobRef.current) {
       abortRef.current?.abort()
       downloadJobRef.current = null
@@ -644,39 +642,43 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       const cachedBody = prefetchRef.current.get(key)
       const inflight = prefetchPromiseRef.current
       const reusing = !cachedBody && inflight?.key === key
+      // When the background lookup is already running, stay on the hero with
+      // a quiet "Opening…" label instead of flashing a full spinner screen.
+      if (cachedBody || reusing) setOpening(true)
+      else setState('analyzing')
+      try {
+        let body = cachedBody
+        // Reuse the background lookup instead of firing a duplicate request.
+        if (reusing) {
+          await inflight.promise
+          body = prefetchRef.current.get(key)
+        }
+        if (!body) {
+          body = await postJsonWithRetry('/api/video/info', { url: result.url, mode })
+        }
+        setOpening(false)
+        setRemoteInfo(body)
+        if (body.variant) variantRef.current = body.variant
+        rememberLink(result.url)
+        // Keep warming in the background — options appear instantly. The file
+        // is reused by the option click, so the ad never waits for a second
+        // download and the close beat stays fixed at four seconds.
+        prefetchBlobs(result.url, mode, body.media)
 
-      // Show the format options in the same tick as the URL validation. Every
-      // video — long or short — responds the same way; metadata and the file
-      // warm-up fill in behind the card instead of blocking it.
-      setState('social')
-      const token = (lookupTokenRef.current += 1)
-      const lookup = cachedBody
-        ? Promise.resolve(cachedBody)
-        : reusing
-          ? inflight.promise.then(() => prefetchRef.current.get(key))
-          : postJsonWithRetry('/api/video/info', { url: result.url, mode }, 3)
-
-      lookup.then(
-        (body) => {
-          if (!body || token !== lookupTokenRef.current) return
-          setRemoteInfo(body)
-          if (body.variant) variantRef.current = body.variant
-          rememberLink(result.url)
-          // Reuse the same warmed file on option click — never a second download.
-          prefetchBlobs(result.url, mode, body.media)
-          const heights = (body.formats || [])
-            .map((item) => Number(item.height))
-            .filter((height) => Number.isFinite(height) && height > 0)
-          if (heights.length) setQuality(String(Math.max(...heights)))
-          const firstStory = body.stories?.[0]?.id
-          if (firstStory != null) setStoryId(String(firstStory))
-        },
-        (cause) => {
-          if (token !== lookupTokenRef.current) return
-          setError(cause.message || 'The download service is unavailable.')
-          setState('unsupported')
-        },
-      )
+        // Show the thumbnail plus the exact formats this video offers.
+        const heights = (body.formats || [])
+          .map((item) => Number(item.height))
+          .filter((height) => Number.isFinite(height) && height > 0)
+        const bestQuality = heights.length ? String(Math.max(...heights)) : '720'
+        const firstStory = body.stories?.[0]?.id
+        setQuality(bestQuality)
+        if (firstStory != null) setStoryId(String(firstStory))
+        setState('social')
+      } catch (cause) {
+        setOpening(false)
+        setError(cause.message || 'The download service is unavailable.')
+        setState('unsupported')
+      }
       return
     }
 
@@ -703,40 +705,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       })
   }
 
-  // Reuse the metadata lookup already in flight after a paste. This avoids a
-  // second TikWM resolve when a visitor taps a format before the info lands.
-  async function infoPayloadFor(url, currentMode) {
-    const key = `${url}|${currentMode}`
-    const cached = prefetchRef.current.get(key)
-    if (cached) return cached
-    const inflight = prefetchPromiseRef.current
-    if (inflight?.key === key) {
-      await inflight.promise
-      return prefetchRef.current.get(key)
-    }
-    return postJsonWithRetry('/api/video/info', { url, mode: currentMode }, 3)
-  }
-
   async function fetchSocialBlob({
     quality: wantedQuality = quality,
     mode: wantedMode = mode,
     storyId: wantedStory = storyId,
     link = info,
-    reuseWarm = true,
   } = {}) {
     if (!link) throw new Error('Link not found.')
-    let media = remoteInfo?.media
-    if (!media && wantedMode !== 'story') {
-      const payload = await infoPayloadFor(link.url, wantedMode)
-      media = payload?.media
-      // That lookup also started the file warm-up — use the exact same Blob
-      // instead of preparing the file a second time.
-      const warmKey = wantedMode === 'mp3'
-        ? `${link.url}|mp3|mp3`
-        : `${link.url}|video|hd`
-      const warm = reuseWarm ? cachedBlobJob(warmKey) : null
-      if (warm) return warm
-    }
     const controller = new AbortController()
     abortRef.current = controller
     try {
@@ -747,7 +722,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         storyId: wantedStory,
         platform: link.platform,
         signal: controller.signal,
-        media,
+        media: remoteInfo?.media,
       })
       return { ...base, objectUrl: URL.createObjectURL(base.blob) }
     } finally {
@@ -812,10 +787,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     if (kind === 'direct') {
       startJob(fetchDirectBlob(info), 'direct')
     } else if (kind === 'sd') {
-      startJob(
-        warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video', reuseWarm: false }),
-        'social',
-      )
+      startJob(warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video' }), 'social')
     } else if (kind === 'mp3') {
       startJob(warmJob(kind) || fetchSocialBlob({ mode: 'mp3' }), 'social')
     } else if (kind === 'story') {
@@ -1078,13 +1050,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             </div>
           )}
 
-          {state === 'social' && info && (
+          {state === 'social' && remoteInfo && (
             <div className="grid w-full max-w-3xl gap-5 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
               <div className="min-w-0">
-              {remoteInfo?.thumbnail && (
+              {remoteInfo.thumbnail && (
                 <div className="relative">
                   <img
-                    src={remoteInfo?.thumbnail}
+                    src={remoteInfo.thumbnail}
                     alt=""
                     className="mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg sm:mx-0"
                   />
@@ -1101,9 +1073,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               )}
               <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
                 <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-teal-600">
-                  {remoteInfo?.platform || 'TikTok'}
+                  {remoteInfo.platform || 'TikTok'}
                 </span>
-                {remoteInfo?.duration ? (
+                {remoteInfo.duration ? (
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
                     {formatDuration(remoteInfo.duration)}
                   </span>
@@ -1113,10 +1085,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                 </span>
               </div>
               <p className="mt-3 text-sm font-bold text-slate-900">
-                {remoteInfo?.uploader || 'TikTok video'}
+                {remoteInfo.uploader || 'TikTok video'}
               </p>
               <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">
-                {remoteInfo?.title || 'Loading video details…'}
+                {remoteInfo.title}
               </p>
 
               {mode === 'video' ? (
