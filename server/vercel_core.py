@@ -743,12 +743,12 @@ def fetch_media(url, session, max_redirects=3, timeout=12, max_bytes=MAX_BYTES):
     raise StoryError("This story media redirected too many times.")
 
 
-def fetch_media_fast(url, timeout=5, chunks=4, max_bytes=MAX_BYTES):
+def fetch_media_fast(url, timeout=5, chunks=8, max_bytes=MAX_BYTES):
     """Download one CDN file in parallel byte ranges.
 
     TikTok's CDN supports Range requests. A single connection can be slow or
-    stall near the end; four short, parallel ranges finish in roughly the same
-    time for a 3 MB and a 6 MB file. That is what keeps the file ready — and
+    stall near the end; short parallel ranges finish in roughly the same time
+    for a 3 MB and a 6 MB file. That is what keeps the file ready — and
     therefore the ad-close beat — consistent across videos of any length.
     """
     current = validate_media_url(url)
