@@ -29,8 +29,9 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
   const contentRef = useRef(null)
   const pushedRef = useRef(false)
   const scriptsRef = useRef(false)
-  // The close control fades in after a short beat so the ad gets seen first.
-  // It stays disabled until the file is ready, but the visitor can always see it.
+  // The close control appears only after the ad beat AND the file is fully
+  // prepared. Showing it early (even disabled) makes visitors think the file
+  // is processing *after* they close the ad.
   const [showClose, setShowClose] = useState(false)
 
   const client = ADS.adsense?.client || ''
@@ -46,6 +47,9 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
   function handleClose() {
     if (canClose) onClose()
   }
+
+  // Both close controls stay hidden while the file is still being prepared.
+  const readyToClose = showClose && canClose
 
   useEffect(() => {
     if (!open || !canRun) {
@@ -118,7 +122,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
       }}
     >
       <div className="relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
-        {showClose && (
+        {readyToClose && (
           <button
             type="button"
             disabled={!canClose}
@@ -171,7 +175,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
           )}
         </div>
 
-        {showClose && (
+        {readyToClose && (
           <div className="flex flex-col items-center gap-1.5 border-t border-slate-200 bg-slate-50 px-3 py-2 text-center sm:flex-row sm:justify-between sm:gap-3 sm:px-4 sm:text-left">
             <span className="text-[9px] text-slate-400 sm:text-[10px]">Ads keep this tool free.</span>
             <button

@@ -717,8 +717,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   function startJob(job, kind) {
     if (downloadJobRef.current) return
 
-    // Show Close after the ad beat even on a slow/failed file, but keep it
-    // disabled until the Blob is ready so the save keeps its user gesture.
+    // The ad keeps "Preparing your file…" until the Blob is fully ready.
+    // Close/Remove ads only appear after that, so no work is left when the
+    // visitor taps them and the save stays inside the user gesture.
     let timer
     const guarded = new Promise((resolve, reject) => {
       const settle = (error) => {
