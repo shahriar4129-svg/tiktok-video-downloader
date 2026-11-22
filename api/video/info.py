@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "server"))
 
-import yt_dlp  # noqa: E402
 
 from tikwm import tikwm_data, tikwm_media  # noqa: E402
 
@@ -112,6 +111,8 @@ def video_info(payload: dict, request: Request):
     last_error = None
     for attempt, options in enumerate(ydl_variants(fast=True), start=1):
         try:
+            import yt_dlp  # lazy — the TikWM path never needs it
+
             with yt_dlp.YoutubeDL(options) as ydl:
                 meta = ydl.extract_info(url, download=False)
                 formats = quality_formats(ydl, meta)

@@ -287,16 +287,27 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   // the visitor picks a format and sits through the ad beat, the Blob is usually
   // already here, so "Remove ads" is active the moment it fades in.
   function prefetchBlobs(rawUrl, currentMode, media) {
-    if (currentMode !== 'video' && currentMode !== 'mp3') return
+    if (currentMode !== 'video' && currentMode !== 'mp3') return null
     // quality 4320 means "best available" to the backend, so the warm-up does
     // not have to wait for the metadata lookup to learn the exact resolution.
     const plan = currentMode === 'mp3'
       ? [{ key: `${rawUrl}|mp3|mp3`, mode: 'mp3' }]
       : [{ key: `${rawUrl}|video|hd`, mode: 'video', quality: '4320' }]
+    let primary = null
     plan.forEach(({ key, mode, quality }) => {
-      if (blobCacheRef.current.has(key) || blobPrefetchRef.current.has(key)) return
+      const cached = blobCacheRef.current.get(key)
+      if (cached) {
+        if (!primary) primary = Promise.resolve(cached)
+        return
+      }
+      const inflight = blobPrefetchRef.current.get(key)
+      if (inflight) {
+        if (!primary) primary = inflight
+        return
+      }
       const promise = requestSocialBlob({ url: rawUrl, quality, mode, media })
       blobPrefetchRef.current.set(key, promise)
+      if (!primary) primary = promise
       promise
         .then((base) => blobCacheRef.current.set(key, base))
         .catch(() => {
@@ -304,6 +315,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         })
         .finally(() => blobPrefetchRef.current.delete(key))
     })
+    // Callers can wait for this before showing options, so the file is already
+    // complete when the ad opens.
+    return primary
   }
 
   function prefetchDirectBlob(result) {
@@ -652,12 +666,27 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         if (!body) {
           body = await postJsonWithRetry('/api/video/info', { url: result.url, mode })
         }
-        setOpening(false)
         setRemoteInfo(body)
         if (body.variant) variantRef.current = body.variant
         rememberLink(result.url)
-        // Also warm the file here — a fast click can beat the paste-time prefetch.
-        prefetchBlobs(result.url, mode, body.media)
+        // Start (or reuse) the file warm-up and wait for it before showing the
+        // options. Every video then follows the same fixed process: the file is
+        // already complete when an option is tapped, so the ad opens instantly
+        // and Close always lands on the four-second beat — never five.
+        const warm = prefetchBlobs(result.url, mode, body.media)
+        if (warm) {
+          try {
+            await Promise.race([
+              warm,
+              wait(PREP_TIMEOUT_MS).then(() => {
+                throw new Error('The download is taking too long. Please try again.')
+              }),
+            ])
+          } catch {
+            // Let the option click retry and surface the real error.
+          }
+        }
+        setOpening(false)
 
         // Show the thumbnail plus the exact formats this video offers.
         const heights = (body.formats || [])

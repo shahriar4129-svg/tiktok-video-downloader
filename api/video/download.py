@@ -22,8 +22,6 @@ from starlette.background import BackgroundTask
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "server"))
 
-import yt_dlp  # noqa: E402
-
 from tikwm import tikwm_data, tikwm_media  # noqa: E402
 
 from vercel_core import (  # noqa: E402
@@ -333,6 +331,8 @@ def video_download(payload: dict, request: Request):
                         options["format"] = video_format
                     options["merge_output_format"] = "mp4"
                     try:
+                        import yt_dlp  # lazy — the TikWM path never needs it
+
                         with yt_dlp.YoutubeDL(options) as ydl:
                             meta = ydl.extract_info(url, download=True)
                             path = locate_download(workdir, ydl, meta, mode)

@@ -25,22 +25,26 @@ from urllib.parse import urljoin, urlparse
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-import yt_dlp
-
 try:
     from curl_cffi import requests as cffi_requests
 except Exception:  # optional — story lookup degrades to a clear error message
     cffi_requests = None
 
-try:
-    # Newer yt-dlp expects an ImpersonateTarget object, not a plain string.
-    from yt_dlp.networking.impersonate import ImpersonateTarget
 
-    IMPERSONATE = ImpersonateTarget.from_str("chrome")
-    SAFARI = ImpersonateTarget.from_str("safari")
-except Exception:
-    IMPERSONATE = "chrome"  # older yt-dlp accepts the string directly
-    SAFARI = "safari"
+def impersonate_target(name):
+    """Resolve yt-dlp's impersonate target only when the fallback is used.
+
+    Importing yt-dlp costs about a second on a cold start, and the normal TikWM
+    path never needs it. Keeping it lazy shortens the wait before the file is
+    ready and the ad can start.
+    """
+    try:
+        # Newer yt-dlp expects an ImpersonateTarget object, not a plain string.
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+
+        return ImpersonateTarget.from_str(name)
+    except Exception:
+        return name  # older yt-dlp accepts the string directly
 
 try:
     import imageio_ffmpeg
@@ -296,7 +300,7 @@ def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
         "noplaylist": True,
         "concurrent_fragment_downloads": 8,
         # curl-cffi gives TikTok browser impersonation when available.
-        "impersonate": IMPERSONATE,
+        "impersonate": impersonate_target("chrome"),
     }
     # TikTok blocks datacenter IP ranges. A proxy in a permitted region is the
     # only reliable fix; configure TIKTOK_PROXY (http://user:pass@host:port)
@@ -327,7 +331,7 @@ def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
     elif variant == "app16":
         options["extractor_args"] = {"tiktok": {"app_info": [""]}}
     elif variant == "safari":
-        options["impersonate"] = SAFARI
+        options["impersonate"] = impersonate_target("safari")
     # variant "web" keeps the plain Chrome webpage path as the last resort.
     if FFMPEG:
         options["ffmpeg_location"] = FFMPEG
