@@ -73,7 +73,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
 
     if (useCustom && contentRef.current && !scriptsRef.current) {
       // dangerouslySetInnerHTML does not run <script> tags. Recreate them so
-      // Adsterra / Monetag snippets that include a script actually work.
+      // Custom ad snippets that include a script actually work.
       scriptsRef.current = true
       contentRef.current.querySelectorAll('script').forEach((old) => {
         if (old.dataset.adExecuted) return

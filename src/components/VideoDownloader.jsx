@@ -31,6 +31,9 @@ const SAMPLE = '/sample-video.mp4'
 const TIKTOK_DEMO = 'https://www.tiktok.com/@therock/video/6829267836783971589'
 // Safety valve: never trap the visitor in the ad if a download stalls.
 const JOB_TIMEOUT_MS = 120000
+// The file is prepared before the ad opens. Bound that wait so a dead backend
+// shows an error instead of freezing the option button forever.
+const PREP_TIMEOUT_MS = 60000
 
 const FAQS = [
   {
@@ -174,7 +177,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const prefetchAbortRef = useRef(null)
   const prefetchKeyRef = useRef('')
   const prefetchPromiseRef = useRef(null)
-  // Prepared files are cached here so the ad's 3-second beat is enough: the
+  // Prepared files are cached here so no work is left when the ad opens: the
   // download starts when the link appears, not when the visitor taps a format.
   const blobCacheRef = useRef(new Map())
   const blobPrefetchRef = useRef(new Map())
@@ -191,6 +194,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const [jobPending, setJobPending] = useState(false)
   const jobPendingRef = useRef(false)
   const [opening, setOpening] = useState(false)
+  // While a chosen format is being prepared (before the ad opens) the option
+  // shows a spinner. Once the Blob exists the ad is a fixed four-second beat.
+  const [preparingOption, setPreparingOption] = useState('')
+  const preparingRef = useRef('')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewSrc, setPreviewSrc] = useState('')
   const [previewIsVideo, setPreviewIsVideo] = useState(false)
@@ -543,6 +550,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
     jobPendingRef.current = false
     setJobPending(false)
+    preparingRef.current = ''
+    setPreparingOption('')
     setOpening(false)
     replaceBlobUrl(null)
     blobRef.current = null
@@ -764,19 +773,43 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     return null
   }
 
-  // Each reference-style option prepares its own file, then shows the ad.
-  function handleSaveOption(kind) {
-    if (downloadJobRef.current || !info) return
-    if (kind === 'direct') {
-      startJob(fetchDirectBlob(info), 'direct')
-    } else if (kind === 'sd') {
-      startJob(warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video' }), 'social')
-    } else if (kind === 'mp3') {
-      startJob(warmJob(kind) || fetchSocialBlob({ mode: 'mp3' }), 'social')
-    } else if (kind === 'story') {
-      startJob(fetchSocialBlob({ mode: 'story', storyId }), 'social')
-    } else {
-      startJob(warmJob('hd') || fetchSocialBlob({ quality, mode: 'video' }), 'social')
+  // Prepare the file BEFORE the ad opens. That makes every video follow the
+  // same fixed process: the Blob is already complete inside the ad, so Close
+  // always appears on the four-second beat and never drifts to five seconds
+  // on a cold start or a slow CDN. The paste-time warm-up is reused here, so
+  // there is never a second download.
+  async function handleSaveOption(kind) {
+    if (downloadJobRef.current || preparingRef.current || !info) return
+    preparingRef.current = kind
+    setPreparingOption(kind)
+
+    try {
+      let job
+      if (kind === 'direct') job = fetchDirectBlob(info)
+      else if (kind === 'sd') job = warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video' })
+      else if (kind === 'mp3') job = warmJob(kind) || fetchSocialBlob({ mode: 'mp3' })
+      else if (kind === 'story') job = fetchSocialBlob({ mode: 'story', storyId })
+      else job = warmJob('hd') || fetchSocialBlob({ quality, mode: 'video' })
+
+      // A resolved job means jobPending clears on the next microtask, so the
+      // ad opens with Close guarantee-ready and only its timer is left.
+      const prepared = await Promise.race([
+        job,
+        wait(PREP_TIMEOUT_MS).then(() => {
+          throw new Error('The download is taking too long. Please try again.')
+        }),
+      ])
+      if (preparingRef.current !== kind) return
+      startJob(Promise.resolve(prepared), kind)
+    } catch (cause) {
+      if (preparingRef.current !== kind) return
+      setError(cause.message || 'Download failed.')
+      if (state !== 'error') setState('error')
+    } finally {
+      if (preparingRef.current === kind) {
+        preparingRef.current = ''
+        setPreparingOption('')
+      }
     }
   }
 
@@ -833,6 +866,28 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const selectedQuality = qualityOptions.find((item) => item.value === quality) || qualityOptions[qualityOptions.length - 1]
   const sdOption = qualityOptions.find((item) => item.value !== selectedQuality?.value) || null
   const sdQuality = sdOption?.value || selectedQuality?.value || quality
+
+  // One shared label so every option shows the same "preparing" state while
+  // its file is being readied before the ad.
+  function optionContent(kind, label, meta) {
+    if (preparingOption === kind) {
+      return (
+        <span className="flex items-center gap-2 text-xs font-bold text-white">
+          <Loader2 className="h-4 w-4 animate-spin text-white" aria-hidden="true" />
+          Preparing your file…
+        </span>
+      )
+    }
+    return (
+      <>
+        <span className="flex items-center gap-2 text-xs font-bold text-white">
+          <Download className="h-4 w-4 text-white" aria-hidden="true" />
+          {label} <AdBadge />
+        </span>
+        <span className="shrink-0 text-[10px] font-semibold text-white/85">{meta}</span>
+      </>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -1142,58 +1197,60 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                 <div className="space-y-2">
                   {mode === 'video' && (
                     <>
-                      <button type="button" onClick={() => handleSaveOption('hd')} className={OPTION_CLASS}>
-                        <span className="flex items-center gap-2 text-xs font-bold text-white">
-                          <Download className="h-4 w-4 text-white" aria-hidden="true" />
-                          Without watermark HD <AdBadge />
-                        </span>
-                        <span className="shrink-0 text-[10px] font-semibold text-white/85">
-                          {selectedQuality?.label}
-                          {selectedQuality?.size > 0 ? ` · ${formatBytes(selectedQuality.size)}` : ''}
-                        </span>
+                      <button
+                        type="button"
+                        disabled={Boolean(preparingOption)}
+                        onClick={() => handleSaveOption('hd')}
+                        className={OPTION_CLASS}
+                      >
+                        {optionContent(
+                          'hd',
+                          'Without watermark HD',
+                          `${selectedQuality?.label || ''}${selectedQuality?.size > 0 ? ` · ${formatBytes(selectedQuality.size)}` : ''}`,
+                        )}
                       </button>
                       {sdOption && (
-                        <button type="button" onClick={() => handleSaveOption('sd')} className={OPTION_CLASS}>
-                          <span className="flex items-center gap-2 text-xs font-bold text-white">
-                            <Download className="h-4 w-4 text-white/90" aria-hidden="true" />
-                            Without watermark <AdBadge />
-                          </span>
-                          <span className="shrink-0 text-[10px] font-semibold text-white/85">
-                            {sdOption.label}
-                            {sdOption.size > 0 ? ` · ${formatBytes(sdOption.size)}` : ''}
-                          </span>
+                        <button
+                          type="button"
+                          disabled={Boolean(preparingOption)}
+                          onClick={() => handleSaveOption('sd')}
+                          className={OPTION_CLASS}
+                        >
+                          {optionContent(
+                            'sd',
+                            'Without watermark',
+                            `${sdOption.label}${sdOption.size > 0 ? ` · ${formatBytes(sdOption.size)}` : ''}`,
+                          )}
                         </button>
                       )}
-                      <button type="button" onClick={() => handleSaveOption('mp3')} className={OPTION_CLASS}>
-                        <span className="flex items-center gap-2 text-xs font-bold text-white">
-                          <Download className="h-4 w-4 text-white/90" aria-hidden="true" />
-                          Download MP3 <AdBadge />
-                        </span>
-                        <span className="shrink-0 text-[10px] font-semibold text-white/85">192 kbps</span>
+                      <button
+                        type="button"
+                        disabled={Boolean(preparingOption)}
+                        onClick={() => handleSaveOption('mp3')}
+                        className={OPTION_CLASS}
+                      >
+                        {optionContent('mp3', 'Download MP3', '192 kbps')}
                       </button>
                     </>
                   )}
                   {mode === 'mp3' && (
-                    <button type="button" onClick={() => handleSaveOption('mp3')} className={OPTION_CLASS}>
-                      <span className="flex items-center gap-2 text-xs font-bold text-white">
-                        <Download className="h-4 w-4 text-white" aria-hidden="true" />
-                        Download MP3 <AdBadge />
-                      </span>
-                      <span className="shrink-0 text-[10px] font-semibold text-white/85">192 kbps</span>
+                    <button
+                      type="button"
+                      disabled={Boolean(preparingOption)}
+                      onClick={() => handleSaveOption('mp3')}
+                      className={OPTION_CLASS}
+                    >
+                      {optionContent('mp3', 'Download MP3', '192 kbps')}
                     </button>
                   )}
                   {mode === 'story' && (
                     <button
                       type="button"
-                      disabled={!storyId}
+                      disabled={!storyId || Boolean(preparingOption)}
                       onClick={() => handleSaveOption('story')}
                       className={OPTION_CLASS}
                     >
-                      <span className="flex items-center gap-2 text-xs font-bold text-white">
-                        <Download className="h-4 w-4 text-white" aria-hidden="true" />
-                        Download Story <AdBadge />
-                      </span>
-                      <span className="shrink-0 text-[10px] font-semibold text-white/85">MP4</span>
+                      {optionContent('story', 'Download Story', 'MP4')}
                     </button>
                   )}
                 </div>
@@ -1211,12 +1268,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                 {info.filename || info.url}
               </p>
               <div className="mt-5 space-y-2">
-                <button type="button" onClick={() => handleSaveOption('direct')} className={OPTION_CLASS}>
-                  <span className="flex items-center gap-2 text-xs font-bold text-white">
-                    <Download className="h-4 w-4 text-white" aria-hidden="true" />
-                    Save file <AdBadge />
-                  </span>
-                  <span className="shrink-0 text-[10px] font-semibold text-white/85">Original file</span>
+                <button
+                  type="button"
+                  disabled={Boolean(preparingOption)}
+                  onClick={() => handleSaveOption('direct')}
+                  className={OPTION_CLASS}
+                >
+                  {optionContent('direct', 'Save file', 'Original file')}
                 </button>
               </div>
             </div>
