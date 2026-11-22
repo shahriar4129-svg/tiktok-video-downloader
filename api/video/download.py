@@ -99,20 +99,21 @@ def audio_stream_ok(info):
 
 
 def needs_transcode(path):
-    """Inspect the real file, not yt-dlp metadata.
+    """Only re-encode when the *video* track cannot play everywhere.
 
-    yt-dlp can report `h264` for a file that Windows still rejects (10-bit,
-    4:4:4, an unusual profile, or a mismatched container tag). Reading the
-    stream info with ffmpeg is the only reliable check before saving.
+    Re-encoding just the audio sounds cheap, but on a long video it still costs
+    over ten seconds — the visitor sits in the ad well past the four-second
+    beat while a short video closes on time. TikWM's H.264 mirror already has
+    a broadly playable video track; its HE-AAC audio plays in all current
+    browsers and phones, so the file is saved untouched. Full re-encoding is
+    kept only for HEVC/10-bit sources that genuinely need it.
     """
     if not FFMPEG:
         return False
     info = probe_streams(path)
     if not info:
         return True
-    if not video_stream_ok(info):
-        return True
-    return not audio_stream_ok(info)
+    return not video_stream_ok(info)
 
 
 def make_compatible_mp4(path, workdir):
