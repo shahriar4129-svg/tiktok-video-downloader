@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
+    "prebuild": "node scripts/generate-ads.mjs",
     "build": "vite build",
     "preview": "vite preview --host",
     "server": "python server/app.py",
