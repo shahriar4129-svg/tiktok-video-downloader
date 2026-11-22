@@ -567,6 +567,25 @@ def safe_filename(title, extension=".mp4"):
     return (cleaned[:100] or "video") + extension
 
 
+def download_filename(meta, extension=".mp4"):
+    """Build one unique, branded name for every saved file.
+
+    The TikTok title stays first so visitors recognise the video; the video ID
+    keeps two posts with the same title apart, and the site name makes the file
+    identifiable as one saved through this downloader. The extension (.mp4 for
+    video, .mp3 for audio) already separates the two formats of the same post.
+    """
+    source = meta if isinstance(meta, dict) else {}
+    title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", str(source.get("title") or "")).strip()
+    title = re.sub(r"\s+", " ", title)[:70].strip(" .") or "tiktok-video"
+    video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(source.get("id") or ""))[:24]
+    parts = [title]
+    if video_id:
+        parts.append(video_id)
+    parts.append("TikTok Video Downloader")
+    return " - ".join(parts) + extension
+
+
 # ---------------------------------------------------------------------------
 # TikTok Stories (best effort)
 #

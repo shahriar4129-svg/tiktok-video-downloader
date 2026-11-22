@@ -20,6 +20,7 @@ import shutil
 import socket
 import tempfile
 import time
+import unicodedata
 from urllib.parse import quote, urlparse
 
 import yt_dlp
@@ -30,6 +31,7 @@ from vercel_core import (  # noqa: E402
     cached_file,
     cffi_requests,
     client_ip,
+    download_filename,
     fetch_media,
     fetch_stories,
     file_cache_key,
@@ -475,15 +477,17 @@ def make_file_response(path, meta):
     with open(path, "rb") as handle:
         payload = io.BytesIO(handle.read())
 
-    raw_title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", meta.get("title") or "").strip()
     extension = safe_extension(path)
-    preferred = (raw_title[:100] or "video") + extension
+    preferred = download_filename(meta, extension)
 
     # Browsers that ignore filename*= still need a readable ASCII name.
-    ascii_base = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_title).strip("._-")
-    if not ascii_base:
-        ascii_base = f"tiktok-{meta.get('id') or 'video'}"
-    fallback = ascii_base[:80]
+    raw_title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", str(meta.get("title") or "")).strip()
+    ascii_title = unicodedata.normalize("NFKD", raw_title).encode("ascii", "ignore").decode()
+    ascii_title = re.sub(r"[^A-Za-z0-9._ -]+", "_", ascii_title).strip(" ._")[:60]
+    video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(meta.get("id") or ""))[:24]
+    fallback = " - ".join(
+        part for part in (ascii_title or "tiktok-video", video_id, "TikTok Video Downloader") if part
+    )[:110]
     if not fallback.lower().endswith(extension.lower()):
         fallback += extension
     disposition = (
