@@ -60,15 +60,10 @@ CHUNK_SIZE = 64 * 1024
 RATE_MESSAGE = "Too many requests. Please try again in a few minutes."
 
 
-def needs_transcode(path):
-    """Inspect the real file, not yt-dlp metadata.
-
-    yt-dlp can report `h264` for a file that Windows still rejects (10-bit,
-    4:4:4, an unusual profile, or a mismatched container tag). Reading the
-    stream info with ffmpeg is the only reliable check before saving.
-    """
+def probe_streams(path):
+    """Return ffmpeg's lowercased stream description for a media file."""
     if not FFMPEG:
-        return False
+        return ""
     try:
         result = subprocess.run(
             [FFMPEG, "-hide_banner", "-i", path],
@@ -78,37 +73,71 @@ def needs_transcode(path):
             timeout=60,
         )
     except Exception:
-        return True
-    info = (result.stderr or "").lower()
-    video_lines = [line for line in info.splitlines() if "video:" in line]
-    if not video_lines:
-        return True
-    video = video_lines[0]
+        return ""
+    return (result.stderr or "").lower()
+
+
+def video_stream_ok(info):
+    """True when the video track is already broadly playable H.264/yuv420p."""
+    lines = [line for line in info.splitlines() if "video:" in line]
+    if not lines:
+        return False
+    video = lines[0]
     if "h264" not in video and "avc" not in video:
-        return True
+        return False
     # 10-bit and 4:4:4 H.264 are not playable by Windows Media Foundation.
     if "yuv420p10" in video or "yuv444" in video:
-        return True
-    if "yuv420p" not in video and "yuvj420p" not in video:
-        return True
-    # AAC is the safest audio codec inside MP4. Anything else (Opus, MP3,
-    # Vorbis, PCM) gets normalised too — some players reject those in MP4.
+        return False
+    return "yuv420p" in video or "yuvj420p" in video
+
+
+def audio_stream_ok(info):
+    """True when every audio track is AAC-LC (HE-AAC is not universal)."""
     for line in (line for line in info.splitlines() if "audio:" in line):
-        # HE-AAC/HE-AACv2 is not decoded by some older players; force AAC-LC.
         if "aac" not in line or "he-aac" in line:
-            return True
-    return False
+            return False
+    return True
+
+
+def needs_transcode(path):
+    """Inspect the real file, not yt-dlp metadata.
+
+    yt-dlp can report `h264` for a file that Windows still rejects (10-bit,
+    4:4:4, an unusual profile, or a mismatched container tag). Reading the
+    stream info with ffmpeg is the only reliable check before saving.
+    """
+    if not FFMPEG:
+        return False
+    info = probe_streams(path)
+    if not info:
+        return True
+    if not video_stream_ok(info):
+        return True
+    return not audio_stream_ok(info)
 
 
 def make_compatible_mp4(path, workdir):
-    """Re-encode anything unusual to H.264/AAC in a standard MP4 container."""
+    """Normalise to H.264/AAC, copying the video track whenever it is fine.
+
+    TikTok's HD stream is usually already H.264/yuv420p with only the audio in
+    HE-AAC. Re-encoding the whole file took ~14s and blew past the ad beat;
+    stream-copying video and re-encoding only audio does the same job in well
+    under a second, with no loss of video quality.
+    """
     if not FFMPEG:
         return path
     output = os.path.join(workdir, "compatible.mp4")
+    info = probe_streams(path)
+    if video_stream_ok(info):
+        video_args = ["-c:v", "copy", "-tag:v", "avc1"]
+    else:
+        video_args = [
+            "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
+            "-crf", "23", "-pix_fmt", "yuv420p", "-tag:v", "avc1",
+        ]
     command = [
         FFMPEG, "-y", "-loglevel", "error", "-i", path,
-        "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
-        "-crf", "23", "-pix_fmt", "yuv420p", "-tag:v", "avc1",
+        *video_args,
         "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart", output,
     ]
