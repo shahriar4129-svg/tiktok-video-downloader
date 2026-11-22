@@ -703,13 +703,40 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       })
   }
 
+  // Reuse the metadata lookup already in flight after a paste. This avoids a
+  // second TikWM resolve when a visitor taps a format before the info lands.
+  async function infoPayloadFor(url, currentMode) {
+    const key = `${url}|${currentMode}`
+    const cached = prefetchRef.current.get(key)
+    if (cached) return cached
+    const inflight = prefetchPromiseRef.current
+    if (inflight?.key === key) {
+      await inflight.promise
+      return prefetchRef.current.get(key)
+    }
+    return postJsonWithRetry('/api/video/info', { url, mode: currentMode }, 3)
+  }
+
   async function fetchSocialBlob({
     quality: wantedQuality = quality,
     mode: wantedMode = mode,
     storyId: wantedStory = storyId,
     link = info,
+    reuseWarm = true,
   } = {}) {
     if (!link) throw new Error('Link not found.')
+    let media = remoteInfo?.media
+    if (!media && wantedMode !== 'story') {
+      const payload = await infoPayloadFor(link.url, wantedMode)
+      media = payload?.media
+      // That lookup also started the file warm-up — use the exact same Blob
+      // instead of preparing the file a second time.
+      const warmKey = wantedMode === 'mp3'
+        ? `${link.url}|mp3|mp3`
+        : `${link.url}|video|hd`
+      const warm = reuseWarm ? cachedBlobJob(warmKey) : null
+      if (warm) return warm
+    }
     const controller = new AbortController()
     abortRef.current = controller
     try {
@@ -720,7 +747,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         storyId: wantedStory,
         platform: link.platform,
         signal: controller.signal,
-        media: remoteInfo?.media,
+        media,
       })
       return { ...base, objectUrl: URL.createObjectURL(base.blob) }
     } finally {
@@ -785,7 +812,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     if (kind === 'direct') {
       startJob(fetchDirectBlob(info), 'direct')
     } else if (kind === 'sd') {
-      startJob(warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video' }), 'social')
+      startJob(
+        warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video', reuseWarm: false }),
+        'social',
+      )
     } else if (kind === 'mp3') {
       startJob(warmJob(kind) || fetchSocialBlob({ mode: 'mp3' }), 'social')
     } else if (kind === 'story') {
