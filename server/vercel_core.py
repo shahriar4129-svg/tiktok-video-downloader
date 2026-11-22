@@ -297,6 +297,12 @@ def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
         # curl-cffi gives TikTok browser impersonation when available.
         "impersonate": IMPERSONATE,
     }
+    # TikTok blocks datacenter IP ranges. A proxy in a permitted region is the
+    # only reliable fix; configure TIKTOK_PROXY (http://user:pass@host:port)
+    # when available. Without it, extraction depends on TikTok's mood.
+    proxy = os.environ.get("TIKTOK_PROXY", "").strip()
+    if proxy:
+        options["proxy"] = proxy
     if mode == "mp3":
         # Audio-only extraction + ffmpeg transcode. ffmpeg is bundled locally,
         # so nothing has to be installed on the host running this function.
