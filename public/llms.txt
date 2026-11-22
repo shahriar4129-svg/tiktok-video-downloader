@@ -1,0 +1,27 @@
+# TikTok Video Downloader
+
+> A free TikTok video downloader that runs in the browser. No login, no quota, no extension.
+
+Paste a TikTok link, click Download, then pick a format. The clean file saves straight to your default Downloads folder and you land back on the format options.
+
+## What it can do
+
+- Save TikTok videos without watermark as MP4, at exactly the resolutions the source offers with estimated file sizes.
+- Extract MP3 audio at 192 kbps.
+- Save an active TikTok story or a direct story media link.
+- Download direct `.mp4`, `.webm` and `.ogg` links through the browser.
+- Preview a prepared video in the browser before saving.
+
+## How it works
+
+TikTok links go through a small Python function using yt-dlp and are streamed back to the browser. Direct video links are fetched into a Blob entirely client-side. Nothing is stored after the request ends.
+
+## FAQ
+
+- **Is it free?** Yes — no login, no quota, no extension.
+- **Watermark?** The original clean stream is used, so the TikTok overlay is not burned in.
+- **Private or age-restricted clips?** Not supported; only public links can be read.
+- **Where does the file go?** To your browser's default Downloads folder.
+- **Ads?** Ads keep the tool free; they appear when you pick a format while the file prepares in the background.
+
+Only download content you own or have permission to save.

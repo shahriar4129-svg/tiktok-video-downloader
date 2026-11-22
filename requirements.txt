@@ -1,0 +1,4 @@
+fastapi==0.117.1
+yt-dlp==2026.10.26
+imageio-ffmpeg==0.7.0
+curl-cffi==0.17.0

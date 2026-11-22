@@ -1,0 +1,5 @@
+# Default-allow so Bing, DuckDuckGo, Brave, Yandex and AI search crawlers
+# can index the site. Only the private video API endpoints are blocked.
+User-agent: *
+Allow: /
+Disallow: /api/

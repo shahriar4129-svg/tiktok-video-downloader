@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules
+dist
+.vite
+coverage
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local secrets and environment
+.env
+.env.*
+server/cookies.txt
+src/config/ads.js
+*.local
+
+# Local tooling / IDE / OS
+.agents/
+.vercel
+.DS_Store
+*.log
+
+# Project docs kept local
+README.md

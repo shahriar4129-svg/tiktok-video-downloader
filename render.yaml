@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: tiktok-video-downloader
+    runtime: python
+    plan: free
+    # Render's native runtimes include node/npm and ffmpeg, so one service
+    # can build the React app and serve dist/ + /api from a single origin.
+    buildCommand: "npm install && npm run build && python -m pip install -r server/requirements.txt"
+    startCommand: "python server/app.py"
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.11"
+      - key: NODE_VERSION
+        value: "22"
+      # Optional: paste the contents of your Netscape cookies.txt here.
+      # - key: VIDEO_COOKIES
+      #   value: "# Netscape HTTP Cookie File\n..."

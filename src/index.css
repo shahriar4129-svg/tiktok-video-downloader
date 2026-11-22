@@ -1,0 +1,107 @@
+@import "tailwindcss";
+/* Installed agent skill docs are markdown, not app UI — keep them out of Tailwind's scan. */
+@source not ".agents";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --animate-ad-close-in: ad-close-in 350ms ease-out both;
+}
+
+@keyframes ad-close-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* reference-style light canvas with dark ink */
+  body {
+    @apply bg-[#f1f1f1] text-[#2a2a2a] antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #f1f1f1;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #c5c5d6;
+    border-radius: 9999px;
+    border: 2px solid #f1f1f1;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #a5a5bd;
+  }
+}
+
+@utility card-surface {
+  @apply rounded-2xl border border-slate-200 bg-white shadow-sm;
+}
+
+@layer components {
+  /* Exact reference input geometry captured from the live page with REA. */
+  .ss-input {
+    height: 64px;
+    border: 1px solid #fff;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.8);
+    box-shadow: 0 26.2731px 38.3588px -12.6111px rgba(15, 59, 56, 0.3);
+    line-height: 64px;
+  }
+
+  .ss-input::placeholder {
+    color: #0f3b38;
+    opacity: 0.3;
+    font-size: 18px;
+  }
+}
+
+/* Signature teal gradient band */
+@utility ss-gradient {
+  background-image: linear-gradient(89.86deg, #0d9488 8.6%, #14b8a6 99.86%);
+}
+
+@utility range-input {
+  @apply h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-300 accent-teal-600;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.animate-toast-in {
+  animation: toast-in 220ms ease-out both;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-panel-in {
+  animation: panel-in 260ms ease-out both;
+}
