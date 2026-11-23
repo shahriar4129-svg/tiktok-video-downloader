@@ -205,10 +205,11 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     setBlobUrl(next)
   }
 
-  // The public resolver can be briefly slow or rate-limited. Retry those
-  // transient failures quietly so the visitor rarely sees an error card.
-  const RETRYABLE = /try again|busy|temporar|could not read|failed|rate|too many/i
+  // Only a rate limit or a server/network failure can change in a moment.
+  // A 400 is a final answer (blocked link, unsupported post, bad request) —
+  // retrying it three times used to turn one quick error into a long wait.
   const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms))
+  const retryableStatus = (status) => status === 429 || status >= 500
 
   async function postJsonWithRetry(path, body, attempts = 3, signal) {
     let lastError
@@ -224,7 +225,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         const payload = await response.json().catch(() => ({}))
         if (response.ok) return payload
         lastError = new Error(payload.error || `Request failed (${response.status})`)
-        if (response.status < 500 && !RETRYABLE.test(payload.error || '')) break
+        if (!retryableStatus(response.status)) break
       } catch (cause) {
         if (signal?.aborted || cause?.name === 'AbortError') throw cause
         lastError = cause
@@ -275,7 +276,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       }
       const body = await response.json().catch(() => ({}))
       lastError = new Error(body.error || `Request failed (${response.status})`)
-      if (signal?.aborted || (response.status < 500 && !RETRYABLE.test(body.error || ''))) break
+      if (signal?.aborted || !retryableStatus(response.status)) break
       if (i < 1) await wait(150 * (i + 1))
     }
     throw lastError
@@ -295,12 +296,23 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
   }
 
+  // Same shape as the backend: account + unique post number + site name.
+  function brandedFileName(media, extension = '.mp4') {
+    const clean = (value) => String(value || '')
+      .replace(/^@/, '')
+      .replace(/[^A-Za-z0-9._-]+/g, '_')
+      .replace(/^[._-]+|[._-]+$/g, '')
+    const account = clean(media?.uploader || media?.author).slice(0, 40) || 'tiktok-video'
+    const postId = clean(media?.id || media?.video_id).slice(0, 24)
+    return `${account}${postId ? `_${postId}` : ''}_TikTok Video Downloader${extension}`
+  }
+
   async function fetchDirectVideo({ media, signal }) {
     const direct = directMediaUrl(media)
     if (!direct || directFailureRef.current.has(direct)) return null
     try {
       const { blob, contentType } = await fetchVideo(direct, { signal })
-      const suggested = `${media?.title || media?.id || 'tiktok'}.mp4`
+      const suggested = brandedFileName(media)
       return {
         blob,
         name: videoFilename(direct, contentType || 'video/mp4', suggested),
@@ -535,9 +547,20 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     const controller = new AbortController()
     prefetchAbortRef.current = controller
     prefetchKeyRef.current = key
-    // Metadata is looked up once, then the file warm-up starts immediately
-    // with the resolved CDN URLs — that direct path is much faster than
-    // asking the download function to resolve the link all over again.
+
+    // Start the file warm-up BEFORE the metadata request. The download endpoint
+    // can resolve the link itself, so the 3–5s preparation now overlaps the
+    // info lookup instead of starting after it. By the time the options appear
+    // and the 4s ad finishes, the Blob is normally already cached. If this
+    // server attempt fails, the call below with `media` retries via the CDN.
+    prefetchBlobs(result.url, currentMode)
+    // In video mode the MP3 button is also one tap away. Warming both here
+    // means whichever option the visitor picks, the file is already prepared
+    // while the ad runs — no preparation waits for the 4s beat to finish.
+    if (currentMode === 'video') prefetchBlobs(result.url, 'mp3')
+
+    // Metadata is looked up once. When it lands we only reuse/upgrade the warm
+    // file above — no second download starts if it is already prepared.
     const promise = postJsonWithRetry(
       '/api/video/info',
       { url: result.url, mode: currentMode },
@@ -550,6 +573,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         if (body.variant) variantRef.current = body.variant
         rememberLink(result.url)
         prefetchBlobs(result.url, currentMode, body.media)
+        if (currentMode === 'video') prefetchBlobs(result.url, 'mp3', body.media)
       })
       .catch(() => {
         // Best effort only — the real click still surfaces any error.
@@ -701,46 +725,53 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     setInfo(result)
 
     if (result.kind === 'social') {
+      // Covers typing/pasting and clicking Download in the same tick, before
+      // any debounced prefetch fires. The ad starts on option tap, so getting
+      // the file warming now is what makes Close feel like an instant save.
+      prefetchBlobs(result.url, mode)
+      if (mode === 'video') prefetchBlobs(result.url, 'mp3')
+
       const key = `${result.url}|${mode}`
       const cachedBody = prefetchRef.current.get(key)
       const inflight = prefetchPromiseRef.current
-      const reusing = !cachedBody && inflight?.key === key
-      // When the background lookup is already running, stay on the hero with
-      // a quiet "Opening…" label instead of flashing a full spinner screen.
-      if (cachedBody || reusing) setOpening(true)
-      else setState('analyzing')
-      try {
-        let body = cachedBody
-        // Reuse the background lookup instead of firing a duplicate request.
-        if (reusing) {
-          await inflight.promise
-          body = prefetchRef.current.get(key)
-        }
-        if (!body) {
-          body = await postJsonWithRetry('/api/video/info', { url: result.url, mode })
-        }
-        setOpening(false)
+
+      // Render the result panel on this same tick. Exact sizes/thumbnail fill
+      // in as soon as metadata lands, but the visitor never watches a spinner
+      // after pressing Download — the click always feels instant.
+      setRemoteInfo(cachedBody || null)
+      setOpening(false)
+      setState('social')
+
+      const applyBody = (body) => {
+        if (!body) return
         setRemoteInfo(body)
         if (body.variant) variantRef.current = body.variant
         rememberLink(result.url)
-        // Keep warming in the background — options appear instantly. The file
-        // is reused by the option click, so the ad never waits for a second
-        // download and the close beat stays as short as the ad config allows.
+        // Reuse/upgrade the file already warming from the paste — no second
+        // download starts here.
         prefetchBlobs(result.url, mode, body.media)
+        if (mode === 'video') prefetchBlobs(result.url, 'mp3', body.media)
 
-        // Show the thumbnail plus the exact formats this video offers.
         const heights = (body.formats || [])
           .map((item) => Number(item.height))
           .filter((height) => Number.isFinite(height) && height > 0)
-        const bestQuality = heights.length ? String(Math.max(...heights)) : '720'
+        if (heights.length) setQuality(String(Math.max(...heights)))
         const firstStory = body.stories?.[0]?.id
-        setQuality(bestQuality)
         if (firstStory != null) setStoryId(String(firstStory))
-        setState('social')
-      } catch (cause) {
-        setOpening(false)
-        setError(cause.message || 'The download service is unavailable.')
-        setState('unsupported')
+      }
+
+      if (cachedBody) {
+        applyBody(cachedBody)
+      } else {
+        // Reuse the lookup already started on paste instead of firing a second
+        // one. A failed lookup must not blank the options — the download
+        // endpoint can still resolve the link on its own.
+        const promise = inflight?.key === key
+          ? inflight.promise
+          : postJsonWithRetry('/api/video/info', { url: result.url, mode })
+        promise
+          .then((body) => applyBody(body || prefetchRef.current.get(key)))
+          .catch(() => { /* provisional options stay usable */ })
       }
       return
     }
@@ -830,6 +861,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         setJobPending(false)
       },
     )
+    // Ad opens on the same tick as the tap. The file was already warmed from
+    // the paste, so the 4s ad beat is what covers any remaining transfer.
     runWithAd(() => finishDownload(guarded, kind))
   }
 
@@ -871,6 +904,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
   // Called only from the ad's Close button, so the save keeps its user gesture.
   async function finishDownload(job, kind) {
+    // Close is on a fixed ad beat. If a large file is still warming up, say so
+    // immediately — the tap should never look frozen for several seconds.
+    if (jobPendingRef.current) showToast('Preparing your file…')
     try {
       const { blob, objectUrl, name, size } = await job
       blobRef.current = blob
@@ -1513,7 +1549,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </p>
       </section>
 
-      <VignetteAd open={vignetteOpen} onClose={closeVignette} canClose={!jobPending} />
+      <VignetteAd open={vignetteOpen} onClose={closeVignette} />
 
       {previewOpen && typeof document !== 'undefined' && createPortal(
         <div

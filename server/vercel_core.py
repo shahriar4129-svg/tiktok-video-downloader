@@ -367,9 +367,11 @@ def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None):
     if preferred in order:
         order.remove(preferred)
         order.insert(0, preferred)
-    # Fast metadata lookups retry only the two strongest paths. Downloads keep
-    # the full second cycle for resilience when TikTok blocks intermittently.
-    order = order + (["aweme1128", "app21"] if fast else list(STRATEGIES))
+    # Metadata only needs the three fastest paths. Downloads race every path:
+    # TikTok blocks them at random, so a shorter list can drop the one working
+    # route. They run in parallel, so extra paths do not add visitor wait time.
+    if fast:
+        order = order[:3]
     return [ydl_options(outtmpl, name, mode, fast=fast) for name in order]
 
 
@@ -405,7 +407,82 @@ def locate_download(workdir, ydl, meta, mode="video"):
     return files[0] if files else None
 
 
-def quality_formats(ydl, meta):
+def media_from_meta(meta):
+    """Direct CDN mirrors from a yt-dlp lookup, so /download never re-resolves.
+
+    TikTok's app API gives each format its own signed CDN URL. Passing those
+    to the download endpoint turns it into a plain file fetch; the second
+    extraction was slow and caused most intermittent 403 errors. H.264 mirrors
+    come first because they save without a lengthy HEVC re-encode.
+    """
+    formats = [item for item in (meta.get("formats") or []) if isinstance(item, dict)]
+    videos = []
+    for item in formats:
+        url = item.get("url")
+        height = item.get("height")
+        if not url or not height or item.get("vcodec") in (None, "none"):
+            continue
+        try:
+            size = int(height)
+        except (TypeError, ValueError):
+            continue
+        codec = str(item.get("vcodec") or "").lower()
+        h264 = codec.startswith(("h264", "avc"))
+        videos.append(((0 if h264 else 1, -size), size, url))
+    videos.sort(key=lambda entry: entry[0])
+
+    alternates = []
+    by_height = {}
+    for _rank, height, url in videos:
+        key = str(height)
+        by_height.setdefault(key, [])
+        if url not in by_height[key]:
+            by_height[key].append(url)
+        if url not in alternates:
+            alternates.append(url)
+
+    audio = next(
+        (
+            item.get("url") for item in formats
+            if item.get("url") and item.get("vcodec") in (None, "none")
+            and item.get("acodec") not in (None, "none")
+        ),
+        None,
+    )
+    return {
+        "video": alternates[0] if alternates else None,
+        "video_alternates": alternates,
+        "audio": audio,
+        "audio_alternates": [audio] if audio else [],
+        "by_height": by_height,
+        "title": meta.get("title") or "tiktok",
+        "id": meta.get("id") or "video",
+        "uploader": meta.get("uploader") or meta.get("uploader_id") or meta.get("channel"),
+        "duration": meta.get("duration"),
+    }
+
+
+def video_selector(height, tiktok=False, exact=False):
+    """Keep TikTok's muxed A/V together instead of pairing two streams.
+
+    TikTok exposes progressive MP4s plus a separate music track. Merging a
+    progressive picture with that second track produces the delayed dialogue
+    visitors notice in saved clips, so TikTok downloads pick one whole stream.
+    H.264 is preferred over HEVC even at a lower height: the HEVC copy needs a
+    full re-encode, which adds seconds after the ad and can shift audio timing.
+    """
+    bound = f"[height={height}]" if exact else f"[height<={height}]"
+    if tiktok:
+        return (
+            f"best{bound}[vcodec^=h264][acodec!=none]/"
+            f"best{bound}[vcodec^=avc1][acodec!=none]/"
+            f"best{bound}[vcodec!=none][acodec!=none]/"
+            f"best{bound}[vcodec!=none]/best"
+        )
+    return f"bestvideo{bound}+bestaudio/best{bound}/best"
+
+
+def quality_formats(ydl, meta, tiktok=False):
     """Resolutions the video actually offers, with estimated final sizes."""
     all_formats = meta.get("formats") or []
     heights = sorted({
@@ -416,32 +493,26 @@ def quality_formats(ydl, meta):
 
     result = []
     for height in heights:
-        size = 0
-        try:
-            selector = ydl.build_format_selector(
-                f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
-            )
-            picked = list(selector({"formats": all_formats}))
-            if picked:
-                size = picked[0].get("filesize") or picked[0].get("filesize_approx") or 0
-        except Exception:
-            size = 0
+        def size_of(fmt):
+            return int(fmt.get("filesize") or fmt.get("filesize_approx") or 0)
 
+        at_height = [
+            fmt for fmt in all_formats
+            if fmt.get("height") == height and fmt.get("vcodec") not in (None, "none")
+        ]
+        # A muxed MP4 already carries its audio. Adding the separate music
+        # track here would overstate the size of the file we actually save.
+        muxed = [size_of(fmt) for fmt in at_height if fmt.get("acodec") not in (None, "none")]
+        size = max(muxed) if muxed else 0
         if not size:
-            video_sizes = [
-                fmt.get("filesize") or fmt.get("filesize_approx") or 0
-                for fmt in all_formats
-                if fmt.get("height") == height and fmt.get("vcodec") not in (None, "none")
-            ]
             audio_sizes = [
-                fmt.get("filesize") or fmt.get("filesize_approx") or 0
-                for fmt in all_formats
+                size_of(fmt) for fmt in all_formats
                 if fmt.get("vcodec") in (None, "none") and fmt.get("acodec") not in (None, "none")
             ]
-            size = (max(video_sizes) if video_sizes else 0) + (max(audio_sizes) if audio_sizes else 0)
+            size = max((size_of(fmt) for fmt in at_height), default=0) + max(audio_sizes, default=0)
 
         if size:
-            result.append({"height": height, "ext": "mp4", "filesize": int(size)})
+            result.append({"height": height, "ext": "mp4", "filesize": size})
     return result
 
 
@@ -547,7 +618,7 @@ def store_file(key, path, meta, size):
     FILE_CACHE[key] = (time.time(), target, dict(meta))
 
 
-def parse_quality(value):
+def parse_quality(value, tiktok=False):
     """Return (height, yt-dlp selector). Strict ASCII digits only.
 
     str.isdigit() also accepts unicode digits like '²', which then crash int()
@@ -559,9 +630,10 @@ def parse_quality(value):
     height = int(text)
     if height < 144 or height > 4320:
         raise ValueError("Invalid video quality.")
-    # Prefer H.264 + AAC so the saved MP4 plays in Windows Media Player,
-    # QuickTime and browsers without paid HEVC codec extensions. HEVC-only
-    # sources are transcoded by the download endpoint when necessary.
+    if tiktok:
+        return height, video_selector(height, True)
+    # Other sites need separate video/audio streams merged by ffmpeg. Prefer
+    # H.264 + AAC so the saved MP4 plays in Windows Media Player and QuickTime.
     return height, (
         f"bestvideo[vcodec^=avc1][height<={height}]+bestaudio[acodec^=mp4a]/"
         f"bestvideo[vcodec^=h264][height<={height}]+bestaudio/"
@@ -574,28 +646,42 @@ def safe_filename(title, extension=".mp4"):
     return (cleaned[:100] or "video") + extension
 
 
-def download_filename(meta, extension=".mp4"):
-    """Build one unique, branded name for every saved file.
+SITE_NAME = "TikTok Video Downloader"
 
-    The TikTok title stays first so visitors recognise the video; the video ID
-    keeps two posts with the same title apart, and the site name makes the file
-    identifiable as one saved through this downloader. The extension (.mp4 for
-    video, .mp3 for audio) already separates the two formats of the same post.
-    Titles are clipped by UTF-8 bytes, not characters, so a Bangla or emoji
-    title still fits under the 255-byte filesystem limit after the suffix.
+
+def account_name(meta):
+    """Clean TikTok handle used as the first part of every saved filename."""
+    source = meta if isinstance(meta, dict) else {}
+    for key in ("uploader", "uploader_id", "channel", "channel_id", "author", "username"):
+        value = source.get(key)
+        if isinstance(value, dict):
+            value = value.get("unique_id") or value.get("id") or value.get("name")
+        if not value:
+            continue
+        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value).strip().lstrip("@"))
+        cleaned = cleaned.strip("._-")[:40]
+        if cleaned:
+            return cleaned
+    return "tiktok-video"
+
+
+def download_filename(meta, extension=".mp4"):
+    """Name saved files as: account_uniqueNumber_website.ext.
+
+    The video title is intentionally excluded. The account makes the file
+    recognisable, the TikTok ID guarantees uniqueness even for reposts, and the
+    site name brands the result. Keeping this in one helper gives the local
+    server and the Vercel functions byte-for-byte identical filenames.
     """
     source = meta if isinstance(meta, dict) else {}
-    title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", str(source.get("title") or "")).strip()
-    title = re.sub(r"\s+", " ", title).strip(" .")
-    if len(title.encode("utf-8")) > 180:
-        title = title.encode("utf-8")[:180].decode("utf-8", "ignore").rstrip(" .")
-    title = title or "tiktok-video"
+    account = account_name(source)
     video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(source.get("id") or ""))[:24]
-    parts = [title]
+    if not video_id:
+        video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(source.get("video_id") or ""))[:24]
+    parts = [account]
     if video_id:
         parts.append(video_id)
-    parts.append("TikTok Video Downloader")
-    return " - ".join(parts) + extension
+    return "_".join(parts) + "_" + SITE_NAME + extension
 
 
 # ---------------------------------------------------------------------------

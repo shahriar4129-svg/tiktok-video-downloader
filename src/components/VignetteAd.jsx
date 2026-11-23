@@ -25,7 +25,7 @@ function loadAdsense(client) {
  * viewport and scales down cleanly on phones and very small windows.
  * Everything is controlled from src/config/ads.js (vignette section).
  */
-export default function VignetteAd({ open, onClose, canClose = true }) {
+export default function VignetteAd({ open, onClose }) {
   const contentRef = useRef(null)
   const pushedRef = useRef(false)
   const scriptsRef = useRef(false)
@@ -140,11 +140,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
             Advertisement
           </span>
           <span className="text-right text-[9px] font-semibold text-slate-400 sm:text-[10px]">
-            {!showClose
-              ? canClose
-                ? 'Close appears in a moment'
-                : 'Preparing in background…'
-              : ''}
+            {!showClose ? 'Close appears in a moment' : ''}
           </span>
         </div>
 

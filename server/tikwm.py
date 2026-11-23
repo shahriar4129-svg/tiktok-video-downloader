@@ -13,14 +13,21 @@ from vercel_core import cffi_requests, log_failure, validate_media_url
 
 # TikWM has two public hostnames. They do not fail together, so querying both
 # at once gives a free second chance without waiting on a slow/dead endpoint.
-API_HOSTS = ("https://www.tikwm.com/api/", "https://api.tikwm.com/api/")
-REQUEST_TIMEOUT = 8
+API_HOSTS = (
+    "https://www.tikwm.com/api/",
+    "https://api.tikwm.com/api/",
+    "https://tikwm.com/api/",
+)
+# A slow/dead resolver must never hold the whole page hostage. Both hosts are
+# raced at this short timeout and the caller also races yt-dlp, so the visitor
+# gets a result from whichever service answers first.
+REQUEST_TIMEOUT = 3
 CACHE_TTL = 600  # CDN URLs carry signed tokens; refresh every 10 minutes.
 CACHE_MAX = 50
 _CACHE = {}
 
 
-def _fetch_once(endpoint, url):
+def _fetch_once(endpoint, url, timeout=REQUEST_TIMEOUT):
     if cffi_requests is None:
         log_failure("tikwm unavailable", RuntimeError("curl-cffi is not installed"))
         return None
@@ -30,7 +37,7 @@ def _fetch_once(endpoint, url):
             endpoint,
             params={"url": url, "hd": "1"},
             headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
-            timeout=REQUEST_TIMEOUT,
+            timeout=timeout,
         )
         payload = response.json()
     except Exception as exc:
@@ -49,40 +56,37 @@ def _fetch_once(endpoint, url):
     return data if isinstance(data, dict) else None
 
 
-def tikwm_data(url):
-    """Return TikWM data using the fastest of both hosts, plus a short cache.
+def tikwm_data(url, timeout=REQUEST_TIMEOUT):
+    """Return TikWM data from the fastest host, plus a short cache.
 
-    A single paste can otherwise fire several upstream calls (prefetch, info,
-    download warm-up). The cache keeps repeated lookups in the same function
-    instance to one call, which also avoids TikWM's rate limit. Racing the two
-    hosts keeps a dead or slow edge from delaying every download.
+    Every caller is also racing a different resolver, so this function must
+    fail fast: two 8 s timeouts plus a serial retry used to add 16+ seconds to
+    a single paste before yt-dlp was even tried. Both hosts now share one short
+    deadline and there is no second slow round — a failure simply lets the
+    other resolver win.
     """
     hit = _CACHE.get(url)
     if hit and time.time() - hit[0] < CACHE_TTL:
         return hit[1]
 
     data = None
-    # Race both public hosts. Waiting for one 12 s timeout before trying the
-    # second is the classic "download takes forever" case on a slow edge.
     if cffi_requests is not None:
         executor = ThreadPoolExecutor(max_workers=len(API_HOSTS))
         try:
-            futures = [executor.submit(_fetch_once, host, url) for host in API_HOSTS]
-            for future in as_completed(futures):
+            futures = [executor.submit(_fetch_once, host, url, timeout) for host in API_HOSTS]
+            for future in as_completed(futures, timeout=timeout + 1):
                 result = future.result()
                 if result:
                     data = result
                     break
             for future in futures:
                 future.cancel()
+        except TimeoutError:
+            # The executor deadline is only a safety net; each request already
+            # has its own timeout. A stale edge must not delay the fallback.
+            pass
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
-
-    if not data:
-        # Both hosts failed once — one bounded retry, then let the caller fall
-        # back to yt-dlp instead of stacking more slow upstream calls.
-        time.sleep(0.4)
-        data = _fetch_once(API_HOSTS[0], url)
 
     if data:
         if len(_CACHE) >= CACHE_MAX:

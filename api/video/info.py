@@ -1,6 +1,7 @@
 """Vercel function -> POST /api/video/info (TikTok only)"""
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -17,10 +18,10 @@ from vercel_core import (  # noqa: E402
     cached_info,
     cache_info,
     client_ip,
-    error_category,
     fetch_stories,
     install_security_headers,
     log_failure,
+    media_from_meta,
     parse_mode,
     quality_formats,
     rate_allowed,
@@ -28,13 +29,105 @@ from vercel_core import (  # noqa: E402
     STRATEGIES,
     validate_tiktok_url,
     with_hint,
-    ydl_variants,
+    ydl_options,
 )
 
 app = FastAPI()
 install_security_headers(app)
 
 RATE_MESSAGE = "Too many requests. Please try again in a few minutes."
+
+
+def tikwm_result(tikwm):
+    """Shape the TikWM response exactly like the yt-dlp metadata response."""
+    author = tikwm.get("author") or {}
+    size = tikwm.get("hd_size") or tikwm.get("size") or 0
+    return {
+        "title": tikwm.get("title") or "video",
+        "duration": tikwm.get("duration"),
+        "thumbnail": tikwm.get("cover") or tikwm.get("origin_cover"),
+        "uploader": f"@{author.get('unique_id')}" if author.get("unique_id") else None,
+        "platform": "TikTok",
+        "formats": [{"height": 720, "label": "HD", "ext": "mp4", "filesize": int(size)}],
+        "variant": "tikwm",
+        # Resolved CDN URLs are handed to /download so it never resolves twice.
+        "media": {
+            "video": tikwm_media(tikwm, "video"),
+            "audio": tikwm_media(tikwm, "mp3"),
+            "video_alternates": tikwm_media_candidates(tikwm, "video"),
+            "audio_alternates": tikwm_media_candidates(tikwm, "mp3"),
+            "title": tikwm.get("title") or "tiktok",
+            "id": tikwm.get("id") or "video",
+            "uploader": author.get("unique_id") or author.get("nickname"),
+            "duration": tikwm.get("duration"),
+            "size": int(size),
+        },
+    }
+
+
+def ydl_result(url, options, variant):
+    """Metadata from one yt-dlp strategy, including the path that worked."""
+    import yt_dlp  # lazy — the TikWM path never needs it
+
+    with yt_dlp.YoutubeDL(options) as ydl:
+        meta = ydl.extract_info(url, download=False)
+        try:
+            formats = quality_formats(ydl, meta, tiktok=True)
+        except Exception:
+            formats = []
+    return {
+        "title": meta.get("title") or "video",
+        "duration": meta.get("duration"),
+        "thumbnail": meta.get("thumbnail"),
+        "uploader": meta.get("uploader"),
+        "platform": meta.get("extractor_key") or meta.get("extractor") or "TikTok",
+        "formats": formats,
+        "variant": variant,
+        "media": media_from_meta(meta),
+    }
+
+
+def resolve_fast(url):
+    """Race resolvers instead of waiting for a dead service before trying the next."""
+    def wave(names, timeout):
+        tasks = []
+        if "tikwm" in names:
+            def try_tikwm():
+                data = tikwm_data(url)
+                return tikwm_result(data) if data else None
+            tasks.append(try_tikwm)
+        for name in names:
+            if name == "tikwm":
+                continue
+            options = ydl_options(variant=name, fast=True)
+            tasks.append(lambda o=options, v=name: ydl_result(url, o, v))
+        executor = ThreadPoolExecutor(max_workers=len(tasks))
+        try:
+            futures = [executor.submit(fn) for fn in tasks]
+            try:
+                for future in as_completed(futures, timeout=timeout):
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        log_failure(f"resolver {type(exc).__name__}", exc)
+                        continue
+                    if result:
+                        return result
+            except TimeoutError:
+                pass
+            return None
+        finally:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    # One wave keeps a cold paste fast; losers are cancelled on first success.
+    # If every route is blocked, retry once quietly — the download path already
+    # does this and often succeeds on the second attempt.
+    result = wave(("tikwm",) + STRATEGIES, 10)
+    if result:
+        return result
+    return wave(("tikwm",) + STRATEGIES, 6)
 
 
 @app.post("/")
@@ -78,70 +171,14 @@ def video_info(payload: dict, request: Request):
                 status_code=400,
             )
 
-    # Cloud IPs are blocked by TikTok, so resolve metadata through TikWM
-    # first. yt-dlp remains the fallback if that service is unavailable.
-    tikwm = tikwm_data(url)
-    if tikwm:
-        author = tikwm.get("author") or {}
-        size = tikwm.get("hd_size") or tikwm.get("size") or 0
-        result = {
-            "title": tikwm.get("title") or "video",
-            "duration": tikwm.get("duration"),
-            "thumbnail": tikwm.get("cover") or tikwm.get("origin_cover"),
-            "uploader": f"@{author.get('unique_id')}" if author.get("unique_id") else None,
-            "platform": "TikTok",
-            # TikWM exposes one clean HD stream; the exact pixel height is
-            # only known after download, so label it honestly as HD.
-            "formats": [{"height": 720, "label": "HD", "ext": "mp4", "filesize": int(size)}],
-            "variant": "tikwm",
-            # Hand the already-resolved CDN URLs to the download function. The
-            # backend returns them straight to the visitor instead of calling
-            # TikWM a second time, which is the main source of flaky failures.
-            "media": {
-                "video": tikwm_media(tikwm, "video"),
-                "audio": tikwm_media(tikwm, "mp3"),
-                # Other CDN mirrors for the same file. The downloader races
-                # them with a short timeout so one hanging edge cannot stretch
-                # the wait (and the ad-close timing) for a whole video.
-                "video_alternates": tikwm_media_candidates(tikwm, "video"),
-                "audio_alternates": tikwm_media_candidates(tikwm, "mp3"),
-                "title": tikwm.get("title") or "tiktok",
-                "id": tikwm.get("id") or "video",
-                "duration": tikwm.get("duration"),
-                # Lets the browser choose the 16/32-range server path for big
-                # files instead of pulling 100 MB over one ordinary fetch.
-                "size": int(size),
-            },
-        }
+    # TikWM and yt-dlp start together; whichever answers first is used. A dead
+    # or rate-limited resolver can no longer add 16+ seconds to a page load.
+    result = resolve_fast(url)
+    if result:
         cache_info(url, result)
         return JSONResponse(result)
 
-    last_error = None
-    for attempt, options in enumerate(ydl_variants(fast=True), start=1):
-        try:
-            import yt_dlp  # lazy — the TikWM path never needs it
-
-            with yt_dlp.YoutubeDL(options) as ydl:
-                meta = ydl.extract_info(url, download=False)
-                formats = quality_formats(ydl, meta)
-
-            result = {
-                "title": meta.get("title") or "video",
-                "duration": meta.get("duration"),
-                "thumbnail": meta.get("thumbnail"),
-                "uploader": meta.get("uploader"),
-                "platform": "TikTok",
-                "formats": formats,
-                # The path that worked now — the download reuses it first.
-                "variant": STRATEGIES[(attempt - 1) % len(STRATEGIES)],
-            }
-            cache_info(url, result)
-            return JSONResponse(result)
-        except Exception as exc:
-            last_error = exc
-            log_failure(f"video/info attempt {attempt}", exc)
-
     return JSONResponse(
-        {"error": with_hint("Could not read video information.", error_category(last_error))},
+        {"error": with_hint("Could not read video information.", "generic")},
         status_code=400,
     )
