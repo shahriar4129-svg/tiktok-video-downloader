@@ -29,9 +29,8 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
   const contentRef = useRef(null)
   const pushedRef = useRef(false)
   const scriptsRef = useRef(false)
-  // The close control appears only after the ad beat AND the file is fully
-  // prepared. Showing it early (even disabled) makes visitors think the file
-  // is processing *after* they close the ad.
+  // Close is on a fixed 4s ad beat. The file is warmed from the link paste and
+  // the save waits for it after Close, so processing never delays the option.
   const [showClose, setShowClose] = useState(false)
 
   const client = ADS.adsense?.client || ''
@@ -43,22 +42,25 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
   const useCustom = Boolean(canRun && html)
   const useAdsense = Boolean(canRun && !useCustom && client)
   const useSlot = useAdsense && Boolean(slot)
+  // Minimum ad view time, configurable in src/config/ads.js. Fixed at 4s.
+  const minMs = Number(config.minMs) > 0 ? Number(config.minMs) : 4000
 
   function handleClose() {
-    if (canClose) onClose()
+    // The button only exists after the ad beat, so no extra gate is needed.
+    onClose()
   }
 
-  // Both close controls stay hidden while the file is still being prepared.
-  const readyToClose = showClose && canClose
+  // Close/Remove ads appear together at 4s, regardless of the background job.
+  const readyToClose = showClose
 
   useEffect(() => {
     if (!open || !canRun) {
       setShowClose(false)
       return undefined
     }
-    const timer = window.setTimeout(() => setShowClose(true), 4000)
+    const timer = window.setTimeout(() => setShowClose(true), minMs)
     return () => window.clearTimeout(timer)
-  }, [open, canRun])
+  }, [open, canRun, minMs])
 
   useEffect(() => {
     if (!open) {
@@ -99,7 +101,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
     }
 
     function onKeyDown(event) {
-      if (event.key === 'Escape' && canClose) onClose()
+      if (event.key === 'Escape' && showClose) onClose()
     }
     document.addEventListener('keydown', onKeyDown)
 
@@ -107,7 +109,7 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
       document.body.style.overflow = previousOverflow
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [open, onClose, canClose, useCustom, useAdsense, useSlot, client])
+  }, [open, onClose, showClose, useCustom, useAdsense, useSlot, client])
 
   if (!open || !canRun || typeof document === 'undefined') return null
 
@@ -118,18 +120,15 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
       aria-modal="true"
       aria-label="Advertisement"
       onMouseDown={(event) => {
-        if (canClose && event.target === event.currentTarget) onClose()
+        if (showClose && event.target === event.currentTarget) onClose()
       }}
     >
       <div className="animate-ad-card-in relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl motion-reduce:animate-none sm:max-h-[calc(100dvh-2rem)]">
         {readyToClose && (
           <button
             type="button"
-            disabled={!canClose}
-            aria-disabled={!canClose}
-            title={canClose ? undefined : 'Preparing your file…'}
             onClick={handleClose}
-            className="animate-ad-close-in absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-800 shadow-lg ring-1 ring-slate-200 transition hover:bg-teal-50 hover:text-teal-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-75 disabled:hover:bg-white disabled:hover:text-slate-800 sm:right-4 sm:top-4 sm:gap-1.5 sm:px-3.5 sm:py-2 sm:text-xs"
+            className="animate-ad-close-in absolute right-2.5 top-2.5 z-10 inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-800 shadow-lg ring-1 ring-slate-200 transition hover:bg-teal-50 hover:text-teal-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 sm:right-4 sm:top-4 sm:gap-1.5 sm:px-3.5 sm:py-2 sm:text-xs"
           >
             <X className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
             {config.closeLabel || 'Close'}
@@ -141,11 +140,11 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
             Advertisement
           </span>
           <span className="text-right text-[9px] font-semibold text-slate-400 sm:text-[10px]">
-            {!canClose
-              ? 'Preparing your file…'
-              : !showClose
+            {!showClose
+              ? canClose
                 ? 'Close appears in a moment'
-                : ''}
+                : 'Preparing in background…'
+              : ''}
           </span>
         </div>
 
@@ -180,9 +179,8 @@ export default function VignetteAd({ open, onClose, canClose = true }) {
             <span className="text-[9px] text-slate-400 sm:text-[10px]">Ads keep this tool free.</span>
             <button
               type="button"
-              disabled={!canClose}
               onClick={handleClose}
-              className="text-[11px] font-semibold text-slate-600 underline decoration-slate-300 underline-offset-2 transition hover:text-teal-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-75 disabled:no-underline"
+              className="text-[11px] font-semibold text-slate-600 underline decoration-slate-300 underline-offset-2 transition hover:text-teal-700 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
             >
               Remove ads
             </button>

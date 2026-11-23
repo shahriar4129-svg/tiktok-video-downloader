@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import tempfile
 import time
 import unicodedata
@@ -33,6 +34,7 @@ from vercel_core import (  # noqa: E402
     client_ip,
     download_filename,
     fetch_media,
+    fetch_media_raced,
     fetch_stories,
     file_cache_key,
     rate_allowed,
@@ -41,8 +43,13 @@ from vercel_core import (  # noqa: E402
     StoryError,
     store_file,
     story_media,
+    validate_media_url,
     validate_story_id,
 )
+
+# TikWM resolves TikTok CDN links from its own network. yt-dlp alone has to
+# fight TikTok's app API from this machine, which makes every download slow.
+from tikwm import tikwm_data, tikwm_media_candidates  # noqa: E402
 
 try:
     # Newer yt-dlp needs an ImpersonateTarget object, not a plain string.
@@ -108,6 +115,7 @@ ALLOWED_HOSTS = [
     "linkedin.com", "pinterest.com", "pinimg.com",
     "snapchat.com", "twitch.tv",
 ]
+TIKTOK_HOSTS = ("tiktok.com", "vtiktok.com")
 
 # Quality choices exposed by the UI. Video + audio are merged into MP4 with
 # ffmpeg (bundled via imageio-ffmpeg). Higher quality = bigger file = slower.
@@ -213,6 +221,92 @@ def parse_mode(value):
     return mode if mode in ("video", "mp3", "story") else "video"
 
 
+def is_tiktok_link(url):
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == name or host.endswith("." + name) for name in TIKTOK_HOSTS)
+
+
+def ffprobe_text(path):
+    """Lowercase ffmpeg stream description, used only for compatibility checks."""
+    if not FFMPEG_DIR:
+        return ""
+    try:
+        result = subprocess.run(
+            [FFMPEG_DIR, "-hide_banner", "-i", path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+        )
+        return (result.stderr or "").lower()
+    except Exception:
+        return ""
+
+
+def ensure_real_mp3(path, workdir):
+    """Convert mislabeled AAC music to a real MP3; keep genuine MP3 files."""
+    if not FFMPEG_DIR:
+        return path
+    if "audio: mp3" in ffprobe_text(path):
+        return path
+    output = os.path.join(workdir, "audio.mp3")
+    subprocess.run(
+        [FFMPEG_DIR, "-y", "-loglevel", "error", "-i", path, "-vn",
+         "-codec:a", "libmp3lame", "-b:a", "128k", output],
+        check=True, timeout=120, capture_output=True,
+    )
+    return output
+
+
+def ensure_compatible_video(path, workdir):
+    """Re-encode only HEVC/10-bit files; H.264/yuv420p is saved untouched."""
+    if not FFMPEG_DIR:
+        return path
+    info = ffprobe_text(path)
+    video = next((line for line in info.splitlines() if "video:" in line), "")
+    if "h264" in video or "avc" in video:
+        if "yuv420p10" not in video and "yuv444" not in video and "yuv420p" in video:
+            return path
+    output = os.path.join(workdir, "compatible.mp4")
+    subprocess.run(
+        [FFMPEG_DIR, "-y", "-loglevel", "error", "-i", path,
+         "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
+         "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "copy",
+         "-movflags", "+faststart", output],
+        check=True, timeout=240, capture_output=True,
+    )
+    return output
+
+
+def tikwm_payload(data):
+    """Shape a TikWM response like the info endpoint's normal payload."""
+    author = data.get("author") or {}
+    size = data.get("hd_size") or data.get("size") or 0
+    video_urls = tikwm_media_candidates(data, "video")
+    audio_urls = tikwm_media_candidates(data, "mp3")
+    return {
+        "title": data.get("title") or "video",
+        "duration": data.get("duration"),
+        "thumbnail": data.get("cover") or data.get("origin_cover"),
+        "uploader": f"@{author.get('unique_id')}" if author.get("unique_id") else None,
+        "platform": "TikTok",
+        "formats": [{"height": 720, "label": "HD", "ext": "mp4", "filesize": int(size)}],
+        "variant": "tikwm",
+        # Hand the resolved CDN mirrors to /download so it never has to resolve
+        # the same link twice.
+        "media": {
+            "video": video_urls[0] if video_urls else None,
+            "audio": audio_urls[0] if audio_urls else None,
+            "video_alternates": video_urls,
+            "audio_alternates": audio_urls,
+            "title": data.get("title") or "tiktok",
+            "id": data.get("id") or "video",
+            "duration": data.get("duration"),
+            "size": int(size),
+        },
+    }
+
+
 def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
     """Build yt-dlp options for one TikTok access strategy."""
     options = {
@@ -262,20 +356,23 @@ def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
 STRATEGIES = ("app22", "app16", "aweme1128", "app21", "safari", "web")
 
 
-def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None):
+def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None, tiktok=True):
     """Ordered fallback strategies — first success wins.
 
     `preferred` is the path that worked during the metadata lookup. Trying it
     first for the download avoids burning time on paths TikTok just blocked.
+    Non-TikTok extractors ignore the TikTok app arguments, so repeating six
+    variants for them was pure latency — one attempt is enough.
     """
+    if not tiktok:
+        return [ydl_options(outtmpl, "web", mode, fast=fast)]
     order = list(STRATEGIES)
     if preferred in order:
         order.remove(preferred)
         order.insert(0, preferred)
-    if fast:
-        order = order + ["app22", "app16"]
-    else:
-        order = order + list(STRATEGIES)
+    # TikWM is the primary TikTok path. If it fails, a couple of quick
+    # alternatives beat twelve slow attempts that keep visitors waiting.
+    order = order[:3 if fast else 4]
     return [ydl_options(outtmpl, name, mode, fast=fast) for name in order]
 
 
@@ -433,8 +530,21 @@ def video_info():
             app.logger.error("story info failed [%s]: %s", type(exc).__name__, str(exc)[:500])
             return error_response(with_hint("Could not load stories.", error_category(exc)))
 
+    # Fast path: TikWM resolves the video on its own network. yt-dlp needs
+    # several signed API calls and is regularly blocked from cloud IPs, so it
+    # is only a fallback here.
+    if mode != "story" and is_tiktok_link(url) and cffi_requests is not None:
+        resolved = tikwm_data(url)
+        if resolved:
+            payload = tikwm_payload(resolved)
+            if len(INFO_CACHE) >= INFO_CACHE_MAX:
+                INFO_CACHE.pop(next(iter(INFO_CACHE)))
+            INFO_CACHE[cache_key] = (time.time(), payload)
+            persist_info_cache()
+            return jsonify(payload)
+
     last_error = None
-    for attempt, options in enumerate(ydl_variants(fast=True), start=1):
+    for attempt, options in enumerate(ydl_variants(fast=True, tiktok=is_tiktok_link(url)), start=1):
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
                 meta = ydl.extract_info(url, download=False)
@@ -564,10 +674,52 @@ def video_download():
                 handle.write(content)
             meta = {"title": f"tiktok-story-{story_id}", "id": story_id}
         else:
+            # TikTok: reuse the CDN mirrors from /info and pull them in parallel
+            # ranges. No yt-dlp extraction, no second resolver call, no slow
+            # app-API retries. Any failure simply falls through to yt-dlp.
+            if is_tiktok_link(url) and cffi_requests is not None:
+                hint = data.get("media") if isinstance(data.get("media"), dict) else {}
+                mirror_key = "audio_alternates" if mode == "mp3" else "video_alternates"
+                mirrors = []
+                for candidate in [hint.get("audio" if mode == "mp3" else "video")] + list(hint.get(mirror_key) or []):
+                    try:
+                        checked = validate_media_url(candidate)
+                    except (ValueError, TypeError):
+                        continue
+                    if checked not in mirrors:
+                        mirrors.append(checked)
+                source = hint
+                if not mirrors:
+                    resolved = tikwm_data(url)
+                    if resolved:
+                        mirrors = tikwm_media_candidates(resolved, mode)
+                        source = resolved
+                if mirrors:
+                    try:
+                        content, _content_type = fetch_media_raced(mirrors)
+                        extension = ".mp3" if mode == "mp3" else ".mp4"
+                        path = os.path.join(workdir, "media" + extension)
+                        with open(path, "wb") as handle:
+                            handle.write(content)
+                        path = (
+                            ensure_real_mp3(path, workdir) if mode == "mp3"
+                            else ensure_compatible_video(path, workdir)
+                        )
+                        meta = {
+                            "title": source.get("title") or "tiktok",
+                            "id": source.get("id") or "video",
+                            "duration": source.get("duration"),
+                        }
+                        store_file(cache_key, path, meta, os.path.getsize(path))
+                        return make_file_response(path, meta)
+                    except Exception as exc:
+                        app.logger.error("tikwm download failed [%s]: %s", type(exc).__name__, str(exc)[:300])
+
             variants = ydl_variants(
                 os.path.join(workdir, "%(id)s.%(ext)s"),
                 mode,
                 preferred=data.get("variant"),
+                tiktok=is_tiktok_link(url),
             )
             for attempt, options in enumerate(variants, start=1):
                 for leftover in glob.glob(os.path.join(workdir, "*")):

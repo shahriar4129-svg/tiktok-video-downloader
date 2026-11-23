@@ -31,6 +31,13 @@ try:
 except Exception:  # optional — story lookup degrades to a clear error message
     cffi_requests = None
 
+try:
+    # Shared DNS/TLS caches let the parallel range workers skip repeated
+    # handshakes without sharing a curl handle across threads (unsafe).
+    from curl_cffi import CurlShare
+except Exception:
+    CurlShare = None
+
 
 def impersonate_target(name):
     """Resolve yt-dlp's impersonate target only when the fallback is used.
@@ -767,18 +774,26 @@ def fetch_media(url, session, max_redirects=3, timeout=12, max_bytes=MAX_BYTES):
     raise StoryError("This story media redirected too many times.")
 
 
-def fetch_media_fast(url, timeout=5, chunks=8, max_bytes=MAX_BYTES):
+def fetch_media_fast(url, timeout=5, chunks=None, max_bytes=MAX_BYTES):
     """Download one CDN file in parallel byte ranges.
 
     TikTok's CDN supports Range requests. A single connection can be slow or
     stall near the end; short parallel ranges finish in roughly the same time
-    for a 3 MB and a 6 MB file. That is what keeps the file ready — and
-    therefore the ad-close beat — consistent across videos of any length.
+    for a small file and a 100 MB file. The worker count scales with the
+    reported size so large files still get a fair shot at the 3s processing
+    window instead of trickling over one connection.
     """
     current = validate_media_url(url)
     headers = {"Referer": "https://www.tiktok.com/"}
+    share = CurlShare() if (CurlShare and cffi_requests is not None) else None
+
+    def new_session():
+        if share is None:
+            return cffi_requests.Session(impersonate="chrome")
+        return cffi_requests.Session(impersonate="chrome", curl_share=share)
+
     for _ in range(4):
-        response = cffi_requests.Session(impersonate="chrome").get(
+        response = new_session().get(
             current,
             headers={**headers, "Range": "bytes=0-0"},
             timeout=timeout,
@@ -808,13 +823,18 @@ def fetch_media_fast(url, timeout=5, chunks=8, max_bytes=MAX_BYTES):
             return response.content, (response.headers.get("content-type") or "").lower()
         raise StoryError("This video's file is too large to save.")
 
+    # More ranges for bigger files. The probe already told us the exact size,
+    # so this costs nothing and keeps large downloads from using one stream.
+    if chunks is None:
+        chunks = 32 if total > 80 * 1024 * 1024 else 16 if total > 25 * 1024 * 1024 else 8
+    chunks = max(1, min(int(chunks), 32))
+
     def part(index):
         start = (index * total) // chunks
         end = ((index + 1) * total) // chunks - 1
         if end < start:
             return b""
-        session = cffi_requests.Session(impersonate="chrome")
-        result = session.get(
+        result = new_session().get(
             current,
             headers={**headers, "Range": f"bytes={start}-{end}"},
             timeout=timeout,
@@ -866,4 +886,12 @@ def fetch_media_raced(urls, timeout=5, max_bytes=MAX_BYTES):
         except Exception as exc:
             if first_error is None:
                 first_error = exc
+
+    # A few CDN edges reject parallel byte ranges. One ordinary request is a
+    # slower but much more reliable last resort than failing the whole download.
+    try:
+        session = cffi_requests.Session(impersonate="chrome")
+        return fetch_media(candidates[0], session, timeout=15, max_bytes=max_bytes)
+    except Exception as exc:
+        log_failure("media plain fallback", exc)
     raise (first_error or StoryError("This video's media is unavailable."))

@@ -178,6 +178,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   // download starts when the link appears, not when the visitor taps a format.
   const blobCacheRef = useRef(new Map())
   const blobPrefetchRef = useRef(new Map())
+  // CDN hosts that refused a browser-side fetch are remembered so every retry
+  // goes straight to the server instead of repeating a known CORS failure.
+  const directFailureRef = useRef(new Set())
   const variantRef = useRef('')
   const abortRef = useRef(null)
   const blobUrlRef = useRef(null)
@@ -236,7 +239,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   // cannot abort a file that another visitor session is warming.
   async function requestSocialBlob({ url, quality, mode, storyId, platform, signal, media }) {
     let lastError
-    for (let i = 0; i < 3; i += 1) {
+    // The server already retries CDN mirrors internally. One client retry is
+    // enough — three full downloads in a row is what makes failures feel slow.
+    for (let i = 0; i < 2; i += 1) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
       let response
       try {
@@ -254,7 +259,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       } catch (cause) {
         if (signal?.aborted || cause?.name === 'AbortError') throw cause
         lastError = cause
-        if (i < 2) await wait(150 * (i + 1))
+        if (i < 1) await wait(150 * (i + 1))
         continue
       }
       if (response.ok) {
@@ -271,9 +276,68 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       const body = await response.json().catch(() => ({}))
       lastError = new Error(body.error || `Request failed (${response.status})`)
       if (signal?.aborted || (response.status < 500 && !RETRYABLE.test(body.error || ''))) break
-      if (i < 2) await wait(150 * (i + 1))
+      if (i < 1) await wait(150 * (i + 1))
     }
     throw lastError
+  }
+
+  // Browser-direct CDN download. The metadata call already resolved a public
+  // media URL, so video mode skips the server hop entirely — the file starts
+  // downloading the moment the link is pasted, not when the ad opens.
+  function directMediaUrl(media) {
+    const value = media?.video
+    if (typeof value !== 'string' || !value.trim()) return ''
+    try {
+      const parsed = new URL(value)
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? value : ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function fetchDirectVideo({ media, signal }) {
+    const direct = directMediaUrl(media)
+    if (!direct || directFailureRef.current.has(direct)) return null
+    try {
+      const { blob, contentType } = await fetchVideo(direct, { signal })
+      const suggested = `${media?.title || media?.id || 'tiktok'}.mp4`
+      return {
+        blob,
+        name: videoFilename(direct, contentType || 'video/mp4', suggested),
+        size: blob.size,
+      }
+    } catch (cause) {
+      if (signal?.aborted || cause?.name === 'AbortError') throw cause
+      // One bad edge (CORS, expiry, network) should not poison the retry path.
+      directFailureRef.current.add(direct)
+      return null
+    }
+  }
+
+  // One preparation path shared by the warm-up and the real option tap.
+  // Small files go straight to the CDN. Large files use the server's 16/32
+  // parallel ranges first — one browser fetch cannot cover 100 MB in 3s.
+  async function prepareBlob({ url, quality, mode, storyId, platform, signal, media }) {
+    if (mode !== 'video') {
+      return requestSocialBlob({ url, quality, mode, storyId, platform, signal, media })
+    }
+
+    const serverArgs = { url, quality, mode, storyId, platform, signal, media }
+    const size = Number(media?.size) || 0
+    if (size > 25 * 1024 * 1024) {
+      try {
+        return await requestSocialBlob(serverArgs)
+      } catch (cause) {
+        if (signal?.aborted || cause?.name === 'AbortError') throw cause
+        const direct = await fetchDirectVideo({ media, signal })
+        if (direct) return direct
+        throw cause
+      }
+    }
+
+    const direct = await fetchDirectVideo({ media, signal })
+    if (direct) return direct
+    return requestSocialBlob(serverArgs)
   }
 
   // Start preparing the likely file as soon as a link is pasted. By the time
@@ -298,7 +362,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         if (!primary) primary = inflight
         return
       }
-      const promise = requestSocialBlob({ url: rawUrl, quality, mode, media })
+      const promise = prepareBlob({ url: rawUrl, quality, mode, media })
       blobPrefetchRef.current.set(key, promise)
       if (!primary) primary = promise
       promise
@@ -599,9 +663,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   }
 
   function closeVignette() {
-    // Keep the ad up until the file is ready — the Close click is the gesture
-    // that starts the save immediately.
-    if (jobPendingRef.current) return
+    // Fixed 4s beat: Close never waits on the job. finishDownload() awaits the
+    // background work, so a large file can keep preparing after the ad closes.
     setVignetteOpen(false)
     vignetteShownRef.current = true
     const action = pendingActionRef.current
@@ -662,7 +725,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         rememberLink(result.url)
         // Keep warming in the background — options appear instantly. The file
         // is reused by the option click, so the ad never waits for a second
-        // download and the close beat stays fixed at four seconds.
+        // download and the close beat stays as short as the ad config allows.
         prefetchBlobs(result.url, mode, body.media)
 
         // Show the thumbnail plus the exact formats this video offers.
@@ -715,7 +778,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     const controller = new AbortController()
     abortRef.current = controller
     try {
-      const base = await requestSocialBlob({
+      const base = await prepareBlob({
         url: link.url,
         quality: wantedQuality,
         mode: wantedMode,
@@ -733,9 +796,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   function startJob(job, kind) {
     if (downloadJobRef.current) return
 
-    // The ad keeps "Preparing your file…" until the Blob is fully ready.
-    // Close/Remove ads only appear after that, so no work is left when the
-    // visitor taps them and the save stays inside the user gesture.
+    // The ad runs on its fixed 4s beat. This job may still be preparing when
+    // Close is tapped; finishDownload() awaits it before saving the file.
     let timer
     const guarded = new Promise((resolve, reject) => {
       const settle = (error) => {
@@ -780,8 +842,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   }
 
   // Option tap starts the already-warmed job and the ad in the same tick —
-  // no waiting before the ad. The file keeps preparing behind the ad and the
-  // Close control only appears once it is complete.
+  // no waiting before the ad. The file keeps preparing behind the ad; Close
+  // still appears on the fixed 4s beat and the save waits for the job.
   function handleSaveOption(kind) {
     if (downloadJobRef.current || !info) return
     if (kind === 'direct') {

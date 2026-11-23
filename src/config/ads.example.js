@@ -80,6 +80,9 @@ export const ADS = {
     html: '',
     showBadge: true,
     oncePerSession: false,
+    // Minimum time the Close button stays hidden (ms). Fixed 4s; the file is
+    // warmed in the background from the link paste, so Close is not gated on it.
+    minMs: 4000,
     closeLabel: 'Close',
   },
 }

@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
 
@@ -92,85 +91,6 @@ def video_stream_ok(info):
     return "yuv420p" in video or "yuvj420p" in video
 
 
-def needs_transcode(path):
-    """Only re-encode when the *video* track cannot play everywhere.
-
-    Re-encoding just the audio sounds cheap, but on a long video it still costs
-    over ten seconds — the visitor sits in the ad well past the four-second
-    beat while a short video closes on time. TikWM's H.264 mirror already has
-    a broadly playable video track; its HE-AAC audio plays in all current
-    browsers and phones, so the file is saved untouched. Full re-encoding is
-    kept only for HEVC/10-bit sources that genuinely need it.
-    """
-    if not FFMPEG:
-        return False
-    info = probe_streams(path)
-    if not info:
-        return True
-    return not video_stream_ok(info)
-
-
-def fetch_donor_media(raw_url):
-    """Prefetch one alternate mirror while the main file is downloading."""
-    url = validate_media_url(raw_url)
-    session = cffi_requests.Session(impersonate="chrome") if cffi_requests else None
-    content, _ = fetch_media(url, session, timeout=8)
-    return url, content
-
-
-def uniform_video_audio(path, donor_urls, workdir, primary_url=None, donor_hint=None):
-    """Give every saved MP4 the same HE-AACv2 audio without re-encoding.
-
-    Most TikTok mirrors already carry HE-AACv2. A few (usually the clean
-    `play` mirror of an older post) carry AAC-LC instead. Rather than spend
-    20+ seconds re-encoding the audio of a ten-minute video, borrow the audio
-    track from another mirror of the *same post* and stream-copy it beside the
-    playable H.264 video. The mux itself takes about 200 ms.
-    """
-    if not FFMPEG:
-        return path
-    if "he-aacv2" in probe_streams(path):
-        return path
-
-    candidates = []
-    tried = set()
-    if donor_hint and isinstance(donor_hint, tuple):
-        candidates.append(donor_hint)
-        tried.add(donor_hint[0])
-    for index, raw in enumerate(donor_urls or []):
-        if primary_url and raw == primary_url:
-            continue
-        try:
-            url = validate_media_url(raw)
-        except (ValueError, TypeError):
-            continue
-        if url not in tried:
-            candidates.append((url, None))
-            tried.add(url)
-
-    session = cffi_requests.Session(impersonate="chrome") if cffi_requests else None
-    for index, (url, content) in enumerate(candidates):
-        try:
-            if content is None:
-                content, _ = fetch_media(url, session, timeout=8)
-            donor = os.path.join(workdir, f"audio-donor-{index}.mp4")
-            with open(donor, "wb") as handle:
-                handle.write(content)
-            if "he-aacv2" not in probe_streams(donor):
-                continue
-            output = os.path.join(workdir, "uniform-audio.mp4")
-            command = [
-                FFMPEG, "-y", "-loglevel", "error", "-i", path, "-i", donor,
-                "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
-                "-movflags", "+faststart", output,
-            ]
-            subprocess.run(command, check=True, timeout=90, capture_output=True)
-            return output
-        except Exception as exc:
-            log_failure("uniform video audio", exc)
-    return path
-
-
 def make_real_mp3(path, workdir):
     """Ensure the saved .mp3 really is MP3, not a mislabeled AAC stream.
 
@@ -196,29 +116,24 @@ def make_real_mp3(path, workdir):
 
 
 def make_compatible_mp4(path, workdir):
-    """Re-encode only incompatible video; always keep the source audio.
+    """Re-encode only when the video track cannot play in normal players.
 
-    Re-encoding a long clip's audio alone costs 20+ seconds, which delays the
-    ad close. TikTok's mirrors all carry the same HE-AAC audio, so copying it
-    keeps every saved file identical in audio quality with no extra wait.
+    A remux alone costs time proportional to the file size and gains nothing
+    for a TikTok mirror that is already H.264/yuv420p in an MP4 container, so
+    compatible downloads are returned untouched. HE-AAC audio stays as-is: it
+    plays in current browsers and phones, and re-encoding it would add seconds
+    to every long clip without improving compatibility.
     """
     if not FFMPEG:
         return path
-    output = os.path.join(workdir, "compatible.mp4")
     info = probe_streams(path)
     if video_stream_ok(info):
-        video_args = ["-c:v", "copy", "-tag:v", "avc1"]
-    else:
-        video_args = [
-            "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
-            "-crf", "23", "-pix_fmt", "yuv420p", "-tag:v", "avc1",
-        ]
+        return path
+    output = os.path.join(workdir, "compatible.mp4")
     command = [
         FFMPEG, "-y", "-loglevel", "error", "-i", path,
-        *video_args,
-        # Keep the source audio untouched. Every TikTok mirror carries the same
-        # HE-AAC stream, so copying it makes short and long videos identical in
-        # audio quality — and avoids a ~20 s re-encode on a 10-minute clip.
+        "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
+        "-crf", "23", "-pix_fmt", "yuv420p", "-tag:v", "avc1",
         "-c:a", "copy",
         "-movflags", "+faststart", output,
     ]
@@ -363,7 +278,7 @@ def video_download(payload: dict, request: Request):
             path = os.path.join(workdir, "media" + extension)
             tikwm_ok = False
 
-            def save_media(content, source, donor_urls=None, primary=None, donor_hint=None):
+            def save_media(content, source):
                 nonlocal path
                 with open(path, "wb") as handle:
                     handle.write(content)
@@ -373,36 +288,21 @@ def video_download(payload: dict, request: Request):
                     "duration": (source or {}).get("duration"),
                 }
                 if mode == "video":
-                    if needs_transcode(path):
-                        try:
-                            path = make_compatible_mp4(path, workdir)
-                        except Exception as exc:
-                            log_failure("h264 transcode", exc)
-                    path = uniform_video_audio(path, donor_urls, workdir, primary, donor_hint)
+                    try:
+                        path = make_compatible_mp4(path, workdir)
+                    except Exception as exc:
+                        log_failure("h264 transcode", exc)
                 else:
                     path = make_real_mp3(path, workdir)
                 return meta
 
             if mirrors and cffi_requests is not None:
                 try:
-                    donor_hint = None
-                    alternate = next((m for m in mirrors if m != primary_url), None) if mode == "video" else None
-                    if alternate and FFMPEG:
-                        # The donor mirror is only needed when the main file has
-                        # AAC-LC audio, but fetching it while the main file is
-                        # still downloading keeps short and long videos on the
-                        # same four-second beat.
-                        with ThreadPoolExecutor(max_workers=2) as pool:
-                            main_future = pool.submit(fetch_media_raced, mirrors)
-                            donor_future = pool.submit(fetch_donor_media, alternate)
-                            content, _content_type = main_future.result()
-                            try:
-                                donor_hint = donor_future.result()
-                            except Exception as exc:
-                                log_failure("audio donor prefetch", exc)
-                    else:
-                        content, _content_type = fetch_media_raced(mirrors)
-                    meta = save_media(content, data, mirrors, primary_url, donor_hint)
+                    # Only the selected mirror is downloaded. Prefetching a
+                    # second full copy just to normalize audio cost several
+                    # seconds and extra bandwidth on every single video.
+                    content, _content_type = fetch_media_raced(mirrors)
+                    meta = save_media(content, data)
                     tikwm_ok = True
                 except Exception as exc:
                     log_failure("tikwm download", exc)
@@ -441,14 +341,12 @@ def video_download(payload: dict, request: Request):
                             path = locate_download(workdir, ydl, meta, mode)
                         if path:
                             if mode == "video":
-                                if needs_transcode(path):
-                                    try:
-                                        path = make_compatible_mp4(path, workdir)
-                                    except Exception as exc:
-                                        # Keep the original file if re-encoding is
-                                        # not possible — a file beats no file.
-                                        log_failure("h264 transcode", exc)
-                                path = uniform_video_audio(path, [], workdir)
+                                try:
+                                    path = make_compatible_mp4(path, workdir)
+                                except Exception as exc:
+                                    # Keep the original file if re-encoding is
+                                    # not possible — a file beats no file.
+                                    log_failure("h264 transcode", exc)
                             else:
                                 path = make_real_mp3(path, workdir)
                             break

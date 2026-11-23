@@ -7,12 +7,14 @@ primary path for TikTok links. yt-dlp stays as a fallback.
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from vercel_core import cffi_requests, log_failure, validate_media_url
 
-# TikWM has two public hostnames. They do not fail together, so alternating
-# them gives a free second chance without waiting on the same endpoint.
+# TikWM has two public hostnames. They do not fail together, so querying both
+# at once gives a free second chance without waiting on a slow/dead endpoint.
 API_HOSTS = ("https://www.tikwm.com/api/", "https://api.tikwm.com/api/")
+REQUEST_TIMEOUT = 8
 CACHE_TTL = 600  # CDN URLs carry signed tokens; refresh every 10 minutes.
 CACHE_MAX = 50
 _CACHE = {}
@@ -28,7 +30,7 @@ def _fetch_once(endpoint, url):
             endpoint,
             params={"url": url, "hd": "1"},
             headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
-            timeout=12,
+            timeout=REQUEST_TIMEOUT,
         )
         payload = response.json()
     except Exception as exc:
@@ -48,24 +50,39 @@ def _fetch_once(endpoint, url):
 
 
 def tikwm_data(url):
-    """Return TikWM data with retries, alternating hosts, and a short cache.
+    """Return TikWM data using the fastest of both hosts, plus a short cache.
 
     A single paste can otherwise fire several upstream calls (prefetch, info,
     download warm-up). The cache keeps repeated lookups in the same function
-    instance to one call, which also avoids TikWM's rate limit.
+    instance to one call, which also avoids TikWM's rate limit. Racing the two
+    hosts keeps a dead or slow edge from delaying every download.
     """
     hit = _CACHE.get(url)
     if hit and time.time() - hit[0] < CACHE_TTL:
         return hit[1]
 
     data = None
-    for attempt in range(3):
-        endpoint = API_HOSTS[attempt % len(API_HOSTS)]
-        data = _fetch_once(endpoint, url)
-        if data:
-            break
-        if attempt < 2:
-            time.sleep(0.5 * (attempt + 1))
+    # Race both public hosts. Waiting for one 12 s timeout before trying the
+    # second is the classic "download takes forever" case on a slow edge.
+    if cffi_requests is not None:
+        executor = ThreadPoolExecutor(max_workers=len(API_HOSTS))
+        try:
+            futures = [executor.submit(_fetch_once, host, url) for host in API_HOSTS]
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    data = result
+                    break
+            for future in futures:
+                future.cancel()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    if not data:
+        # Both hosts failed once — one bounded retry, then let the caller fall
+        # back to yt-dlp instead of stacking more slow upstream calls.
+        time.sleep(0.4)
+        data = _fetch_once(API_HOSTS[0], url)
 
     if data:
         if len(_CACHE) >= CACHE_MAX:

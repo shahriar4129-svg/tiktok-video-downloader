@@ -108,6 +108,9 @@ def video_info(payload: dict, request: Request):
                 "title": tikwm.get("title") or "tiktok",
                 "id": tikwm.get("id") or "video",
                 "duration": tikwm.get("duration"),
+                # Lets the browser choose the 16/32-range server path for big
+                # files instead of pulling 100 MB over one ordinary fetch.
+                "size": int(size),
             },
         }
         cache_info(url, result)
