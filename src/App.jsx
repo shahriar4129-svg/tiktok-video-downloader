@@ -3,6 +3,7 @@ import { Analytics } from '@vercel/analytics/react'
 import { Check, ShieldCheck, Video, X } from 'lucide-react'
 import VideoDownloader from './components/VideoDownloader.jsx'
 import BannerAd from './components/BannerAd.jsx'
+import HeaderPromo from './components/HeaderPromo.jsx'
 
 export default function App() {
   const [videoHasResult, setVideoHasResult] = useState(false)
@@ -51,10 +52,13 @@ export default function App() {
             <a href="#faq" className="transition hover:text-teal-600">FAQ</a>
             <a href="/guides/" className="transition hover:text-teal-600">Guides</a>
           </nav>
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-teal-50 px-2.5 py-1.5 text-[11px] font-semibold text-teal-700">
-            <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-            Free &amp; private
-          </span>
+          <div className="flex items-center gap-2">
+            <HeaderPromo />
+            <span className="hidden items-center gap-1.5 rounded-md bg-teal-50 px-2.5 py-1.5 text-[11px] font-semibold text-teal-700 lg:inline-flex">
+              <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+              Free &amp; private
+            </span>
+          </div>
         </div>
       </header>
 

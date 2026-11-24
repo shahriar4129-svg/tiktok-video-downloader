@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ADS } from '../config/ads.js'
 
 const LOADER_ID = 'adsbygoogle-loader'
@@ -51,8 +51,38 @@ export default function BannerAd({ slot, className = '', minHeight = 96 }) {
     adsenseOn ? useAdsense || useAutoAnchor : useHtml || useImage,
   )
 
+  const fallback = adsense?.fallback || {}
+  const fallbackSlots = Array.isArray(fallback.slots) ? fallback.slots : []
+  const useFallback = Boolean(
+    useAdsense &&
+      ADS.enabled &&
+      fallback.enabled &&
+      fallback.image &&
+      (fallbackSlots.length === 0 || fallbackSlots.includes(slot)),
+  )
+  const fallbackExternal = /^https?:\/\//i.test(fallback.href || '')
+
   const contentRef = useRef(null)
   const pushedRef = useRef(false)
+  const [unfilled, setUnfilled] = useState(false)
+
+  useEffect(() => {
+    setUnfilled(false)
+  }, [slot])
+
+  useEffect(() => {
+    if (!useAdsense || !contentRef.current) return undefined
+    const ins = contentRef.current.querySelector('ins.adsbygoogle')
+    if (!ins) return undefined
+
+    const checkStatus = () => {
+      if (ins.getAttribute('data-ad-status') === 'unfilled') setUnfilled(true)
+    }
+    checkStatus()
+    const observer = new MutationObserver(checkStatus)
+    observer.observe(ins, { attributes: true, attributeFilter: ['data-ad-status'] })
+    return () => observer.disconnect()
+  }, [useAdsense, adsenseSlot, slot])
 
   useEffect(() => {
     if (!active) return
@@ -89,7 +119,7 @@ export default function BannerAd({ slot, className = '', minHeight = 96 }) {
 
   return (
     <aside
-      aria-label="Advertisement"
+      aria-label={unfilled && useFallback ? 'Promotion' : 'Advertisement'}
       data-ad-slot={slot}
       className={`mx-auto w-full max-w-6xl px-4 sm:px-6 ${className}`}
     >
@@ -99,14 +129,28 @@ export default function BannerAd({ slot, className = '', minHeight = 96 }) {
         className="my-4 flex w-full items-center justify-center overflow-hidden rounded-xl"
       >
         {useAdsense ? (
-          <ins
-            className="adsbygoogle block w-full"
-            style={{ display: 'block' }}
-            data-ad-client={client}
-            data-ad-slot={adsenseSlot}
-            data-ad-format="auto"
-            data-full-width-responsive="true"
-          />
+          unfilled && useFallback ? (
+            <a
+              href={fallback.href || '#'}
+              {...(fallbackExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+              className="block w-full"
+            >
+              <img
+                src={fallback.image}
+                alt={fallback.alt || 'Advertisement'}
+                className="mx-auto max-h-[120px] w-full rounded-lg object-contain"
+              />
+            </a>
+          ) : (
+            <ins
+              className="adsbygoogle block w-full"
+              style={{ display: 'block' }}
+              data-ad-client={client}
+              data-ad-slot={adsenseSlot}
+              data-ad-format="auto"
+              data-full-width-responsive="true"
+            />
+          )
         ) : useAutoAnchor ? (
           // Auto-ads mode: an unslotted anchor gives Google a clean mount point.
           <ins
