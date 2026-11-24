@@ -357,21 +357,22 @@ def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
 STRATEGIES = ("aweme1128", "app21", "web", "app22", "app16", "safari")
 
 
-def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None):
+def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None, limit=None):
     """Ordered fallback strategies — first success wins.
 
     `preferred` is the path that worked during the metadata lookup. Trying it
     first for the download avoids burning time on paths TikTok just blocked.
+    `limit` keeps the download race small when the winning route is already
+    known; extra routes then compete for the same bandwidth and delay the save.
     """
     order = list(STRATEGIES)
     if preferred in order:
         order.remove(preferred)
         order.insert(0, preferred)
-    # Metadata only needs the three fastest paths. Downloads race every path:
-    # TikTok blocks them at random, so a shorter list can drop the one working
-    # route. They run in parallel, so extra paths do not add visitor wait time.
     if fast:
-        order = order[:3]
+        limit = 3 if limit is None else min(limit, 3)
+    if limit:
+        order = order[:limit]
     return [ydl_options(outtmpl, name, mode, fast=fast) for name in order]
 
 
@@ -470,16 +471,26 @@ def video_selector(height, tiktok=False, exact=False):
     visitors notice in saved clips, so TikTok downloads pick one whole stream.
     H.264 is preferred over HEVC even at a lower height: the HEVC copy needs a
     full re-encode, which adds seconds after the ad and can shift audio timing.
+
+    When the visitor picked a resolution the video actually offers, try that
+    exact height first. A plain `best[height<=1280]` saves the higher-bitrate
+    1024p copy instead of the 1280p one the visitor chose.
     """
-    bound = f"[height={height}]" if exact else f"[height<={height}]"
+    bounds = [f"[height={height}]", f"[height<={height}]"] if exact else [f"[height<={height}]"]
     if tiktok:
-        return (
-            f"best{bound}[vcodec^=h264][acodec!=none]/"
-            f"best{bound}[vcodec^=avc1][acodec!=none]/"
-            f"best{bound}[vcodec!=none][acodec!=none]/"
-            f"best{bound}[vcodec!=none]/best"
-        )
-    return f"bestvideo{bound}+bestaudio/best{bound}/best"
+        chains = []
+        for bound in bounds:
+            chains.extend((
+                f"best{bound}[vcodec^=h264][acodec!=none]",
+                f"best{bound}[vcodec^=avc1][acodec!=none]",
+                f"best{bound}[vcodec!=none][acodec!=none]",
+                f"best{bound}[vcodec!=none]",
+            ))
+        chains.append("best")
+        return "/".join(chains)
+    return "/".join(
+        f"bestvideo{bound}+bestaudio/best{bound}/best" for bound in bounds
+    )
 
 
 def quality_formats(ydl, meta, tiktok=False):
@@ -575,7 +586,12 @@ FILE_CACHE = {}
 FILE_CACHE_DIR = os.path.join(tempfile.gettempdir(), "tiktok-video-downloader-file-cache")
 FILE_CACHE_TTL = 300
 FILE_CACHE_MAX = 8
-FILE_CACHE_MAX_BYTES = 50 * 1024 * 1024
+# A prepared file is streamed straight from this cache at ad close. Keeping the
+# 100 MB+ case cached is the only way a large video feels as instant as a small
+# one — the browser never has to assemble a giant Blob in JavaScript.
+FILE_CACHE_MAX_BYTES = MAX_BYTES
+FILE_CACHE_BUDGET = 400 * 1024 * 1024
+FILE_CACHE_BYTES = 0
 try:
     os.makedirs(FILE_CACHE_DIR, exist_ok=True)
 except OSError:
@@ -598,7 +614,21 @@ def cached_file(key):
     return path, hit[2]
 
 
+def _drop_cached_file(key):
+    global FILE_CACHE_BYTES
+    hit = FILE_CACHE.pop(key, None)
+    if not hit:
+        return
+    FILE_CACHE_BYTES = max(0, FILE_CACHE_BYTES - (hit[3] if len(hit) > 3 else 0))
+    try:
+        os.remove(hit[1])
+    except OSError:
+        pass
+
+
 def store_file(key, path, meta, size):
+    """Cache a prepared file so ad close is a plain stream, never a re-fetch."""
+    global FILE_CACHE_BYTES
     if size > FILE_CACHE_MAX_BYTES or size <= 0:
         return
     extension = safe_extension(path)
@@ -607,18 +637,18 @@ def store_file(key, path, meta, size):
         shutil.copy2(path, target)
     except OSError:
         return
-    if len(FILE_CACHE) >= FILE_CACHE_MAX:
-        oldest = next(iter(FILE_CACHE))
-        old_hit = FILE_CACHE.pop(oldest, None)
-        if old_hit and old_hit[1] != target:
-            try:
-                os.remove(old_hit[1])
-            except OSError:
-                pass
-    FILE_CACHE[key] = (time.time(), target, dict(meta))
+    if key in FILE_CACHE:
+        _drop_cached_file(key)
+    while (
+        len(FILE_CACHE) >= FILE_CACHE_MAX
+        or FILE_CACHE_BYTES + size > FILE_CACHE_BUDGET
+    ) and FILE_CACHE:
+        _drop_cached_file(next(iter(FILE_CACHE)))
+    FILE_CACHE[key] = (time.time(), target, dict(meta), size)
+    FILE_CACHE_BYTES += size
 
 
-def parse_quality(value, tiktok=False):
+def parse_quality(value, tiktok=False, exact=False):
     """Return (height, yt-dlp selector). Strict ASCII digits only.
 
     str.isdigit() also accepts unicode digits like '²', which then crash int()
@@ -631,7 +661,7 @@ def parse_quality(value, tiktok=False):
     if height < 144 or height > 4320:
         raise ValueError("Invalid video quality.")
     if tiktok:
-        return height, video_selector(height, True)
+        return height, video_selector(height, True, exact=exact)
     # Other sites need separate video/audio streams merged by ffmpeg. Prefer
     # H.264 + AAC so the saved MP4 plays in Windows Media Player and QuickTime.
     return height, (
@@ -878,6 +908,7 @@ def fetch_media_fast(url, timeout=5, chunks=None, max_bytes=MAX_BYTES):
             return cffi_requests.Session(impersonate="chrome")
         return cffi_requests.Session(impersonate="chrome", curl_share=share)
 
+    redirected = False
     for _ in range(4):
         response = new_session().get(
             current,
@@ -886,13 +917,17 @@ def fetch_media_fast(url, timeout=5, chunks=None, max_bytes=MAX_BYTES):
             allow_redirects=False,
         )
         if response.status_code in (301, 302, 303, 307, 308):
+            redirected = True
             location = response.headers.get("location")
             if not location:
                 raise StoryError("This video's media redirect is incomplete.")
             current = validate_media_url(urljoin(current, location))
             continue
+        redirected = False
         break
 
+    if redirected:
+        raise StoryError("This video's media redirected too many times.")
     if response.status_code >= 400:
         raise StoryError("This video's media download failed.")
 

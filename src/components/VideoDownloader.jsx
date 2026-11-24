@@ -14,13 +14,7 @@ import {
   Video,
   X,
 } from 'lucide-react'
-import {
-  classifyUrl,
-  downloadNameFromDisposition,
-  fetchVideo,
-  formatBytes,
-  videoFilename,
-} from '../lib/video.js'
+import { classifyUrl, formatBytes } from '../lib/video.js'
 import BannerAd from './BannerAd.jsx'
 import VignetteAd from './VignetteAd.jsx'
 import { ADS } from '../config/ads.js'
@@ -29,8 +23,6 @@ import { ADS } from '../config/ads.js'
 const SAMPLE = '/sample-video.mp4'
 // Public TikTok clip — used only as a quick demo chip.
 const TIKTOK_DEMO = 'https://www.tiktok.com/@therock/video/6829267836783971589'
-// Safety valve: never trap the visitor in the ad if a download stalls.
-const JOB_TIMEOUT_MS = 120000
 
 const FAQS = [
   {
@@ -63,7 +55,7 @@ const FAQS = [
   },
   {
     q: 'Why do I see an ad?',
-    a: 'Ads keep this tool free. They appear when you pick a download format, and the file is prepared in the background while the ad is open.',
+    a: 'Ads keep this tool free. The file is prepared in the background as soon as you paste the link, so closing the ad starts the save instantly — even for a 100 MB or 20-minute video.',
   },
   {
     q: 'Do you store my links or files?',
@@ -155,391 +147,127 @@ function Step({ number, title, children }) {
   )
 }
 
+/**
+ * The download is deliberately URL-based, not Blob-based.
+ *
+ * A 100 MB file or a 20-minute clip cannot be assembled in JavaScript inside a
+ * four-second ad. Instead the server prepares the file in the background from
+ * the moment a link is pasted, and closing the ad simply visits a normal
+ * download URL. The browser streams it to disk with the same instant hand-off
+ * for a tiny clip and a huge one — no fetch() to wait on, no RAM spike.
+ */
 export default function VideoDownloader({ showToast, onResultStateChange }) {
   const [url, setUrl] = useState('')
   const [platform, setPlatform] = useState('TikTok')
   const [mode, setMode] = useState('video')
   const [quality, setQuality] = useState('720')
   const [storyId, setStoryId] = useState('')
-  const [state, setState] = useState('idle') // idle | loading | analyzing | social | ready | unsupported | error
+  const [state, setState] = useState('idle') // idle | social | direct | error | unsupported
   const [info, setInfo] = useState(null)
   const [remoteInfo, setRemoteInfo] = useState(null)
+  const [infoLoading, setInfoLoading] = useState(false)
   const [serviceReady, setServiceReady] = useState(true)
   const [error, setError] = useState('')
-  const [blobUrl, setBlobUrl] = useState(null)
-  const [fileName, setFileName] = useState('')
-  const [fileSize, setFileSize] = useState(0)
+  const [vignetteOpen, setVignetteOpen] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewSrc, setPreviewSrc] = useState('')
+  const [previewIsVideo, setPreviewIsVideo] = useState(false)
+  const [lastRequest, setLastRequest] = useState(null)
 
   const prefetchRef = useRef(new Map())
   const prefetchAbortRef = useRef(null)
   const prefetchKeyRef = useRef('')
   const prefetchPromiseRef = useRef(null)
-  // Prepared files are cached here so no work is left when the ad opens: the
-  // download starts when the link appears, not when the visitor taps a format.
-  const blobCacheRef = useRef(new Map())
-  const blobPrefetchRef = useRef(new Map())
-  // CDN hosts that refused a browser-side fetch are remembered so every retry
-  // goes straight to the server instead of repeating a known CORS failure.
-  const directFailureRef = useRef(new Set())
+  const preparedRef = useRef(new Set())
   const variantRef = useRef('')
   const abortRef = useRef(null)
-  const blobUrlRef = useRef(null)
-  const blobRef = useRef(null)
   const resultPanelRef = useRef(null)
-  const [vignetteOpen, setVignetteOpen] = useState(false)
   const pendingActionRef = useRef(null)
   const vignetteShownRef = useRef(false)
-  // The ad is open while the file is fetched in the background.
-  const downloadJobRef = useRef(null)
-  const [jobPending, setJobPending] = useState(false)
-  const jobPendingRef = useRef(false)
-  const [opening, setOpening] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const [previewSrc, setPreviewSrc] = useState('')
-  const [previewIsVideo, setPreviewIsVideo] = useState(false)
-  const previewObjectUrlRef = useRef('')
+  const lastRequestRef = useRef(null)
 
-  function replaceBlobUrl(next) {
-    if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current)
-    blobUrlRef.current = next
-    setBlobUrl(next)
-  }
-
-  // Only a rate limit or a server/network failure can change in a moment.
-  // A 400 is a final answer (blocked link, unsupported post, bad request) —
-  // retrying it three times used to turn one quick error into a long wait.
-  const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms))
-  const retryableStatus = (status) => status === 429 || status >= 500
-
-  async function postJsonWithRetry(path, body, attempts = 3, signal) {
-    let lastError
-    for (let i = 0; i < attempts; i += 1) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-      try {
-        const response = await fetch(path, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          ...(signal ? { signal } : {}),
-        })
-        const payload = await response.json().catch(() => ({}))
-        if (response.ok) return payload
-        lastError = new Error(payload.error || `Request failed (${response.status})`)
-        if (!retryableStatus(response.status)) break
-      } catch (cause) {
-        if (signal?.aborted || cause?.name === 'AbortError') throw cause
-        lastError = cause
-      }
-      if (i < attempts - 1) await wait(150 * (i + 1))
-    }
-    throw lastError
-  }
-
-  // One shared request path for both the foreground save and the background
-  // warm-up. `signal` is only passed by the foreground job so a cancelled job
-  // cannot abort a file that another visitor session is warming.
-  async function requestSocialBlob({ url, quality, mode, storyId, platform, signal, media }) {
-    let lastError
-    // The server already retries CDN mirrors internally. One client retry is
-    // enough — three full downloads in a row is what makes failures feel slow.
-    for (let i = 0; i < 2; i += 1) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-      let response
-      try {
-        response = await fetch('/api/video/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url, quality, mode, storyId,
-            variant: variantRef.current,
-            // Reuse the CDN URLs from the info lookup — no second resolver call.
-            media,
-          }),
-          ...(signal ? { signal } : {}),
-        })
-      } catch (cause) {
-        if (signal?.aborted || cause?.name === 'AbortError') throw cause
-        lastError = cause
-        if (i < 1) await wait(150 * (i + 1))
-        continue
-      }
-      if (response.ok) {
-        const blob = await response.blob()
-        const disposition = response.headers.get('content-disposition') || ''
-        const fallbackExt = mode === 'mp3' ? '.mp3' : '.mp4'
-        const name = downloadNameFromDisposition(
-          disposition,
-          url,
-          `${platform || 'video'}${fallbackExt}`,
-        )
-        return { blob, name, size: blob.size }
-      }
-      const body = await response.json().catch(() => ({}))
-      lastError = new Error(body.error || `Request failed (${response.status})`)
-      if (signal?.aborted || !retryableStatus(response.status)) break
-      if (i < 1) await wait(150 * (i + 1))
-    }
-    throw lastError
-  }
-
-  // Browser-direct CDN download. The metadata call already resolved a public
-  // media URL, so video mode skips the server hop entirely — the file starts
-  // downloading the moment the link is pasted, not when the ad opens.
-  function directMediaUrl(media) {
-    const value = media?.video
-    if (typeof value !== 'string' || !value.trim()) return ''
-    try {
-      const parsed = new URL(value)
-      return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? value : ''
-    } catch {
-      return ''
-    }
-  }
-
-  // Same shape as the backend: account + unique post number + site name.
-  function brandedFileName(media, extension = '.mp4') {
-    const clean = (value) => String(value || '')
-      .replace(/^@/, '')
-      .replace(/[^A-Za-z0-9._-]+/g, '_')
-      .replace(/^[._-]+|[._-]+$/g, '')
-    const account = clean(media?.uploader || media?.author).slice(0, 40) || 'tiktok-video'
-    const postId = clean(media?.id || media?.video_id).slice(0, 24)
-    return `${account}${postId ? `_${postId}` : ''}_TikTok Video Downloader${extension}`
-  }
-
-  async function fetchDirectVideo({ media, signal }) {
-    const direct = directMediaUrl(media)
-    if (!direct || directFailureRef.current.has(direct)) return null
-    try {
-      const { blob, contentType } = await fetchVideo(direct, { signal })
-      const suggested = brandedFileName(media)
-      return {
-        blob,
-        name: videoFilename(direct, contentType || 'video/mp4', suggested),
-        size: blob.size,
-      }
-    } catch (cause) {
-      if (signal?.aborted || cause?.name === 'AbortError') throw cause
-      // One bad edge (CORS, expiry, network) should not poison the retry path.
-      directFailureRef.current.add(direct)
-      return null
-    }
-  }
-
-  // One preparation path shared by the warm-up and the real option tap.
-  // Small files go straight to the CDN. Large files use the server's 16/32
-  // parallel ranges first — one browser fetch cannot cover 100 MB in 3s.
-  async function prepareBlob({ url, quality, mode, storyId, platform, signal, media }) {
-    if (mode !== 'video') {
-      return requestSocialBlob({ url, quality, mode, storyId, platform, signal, media })
-    }
-
-    const serverArgs = { url, quality, mode, storyId, platform, signal, media }
-    const size = Number(media?.size) || 0
-    if (size > 25 * 1024 * 1024) {
-      try {
-        return await requestSocialBlob(serverArgs)
-      } catch (cause) {
-        if (signal?.aborted || cause?.name === 'AbortError') throw cause
-        const direct = await fetchDirectVideo({ media, signal })
-        if (direct) return direct
-        throw cause
-      }
-    }
-
-    const direct = await fetchDirectVideo({ media, signal })
-    if (direct) return direct
-    return requestSocialBlob(serverArgs)
-  }
-
-  // Start preparing the likely file as soon as a link is pasted. By the time
-  // the visitor picks a format and sits through the ad beat, the Blob is usually
-  // already here, so "Remove ads" is active the moment it fades in.
-  function prefetchBlobs(rawUrl, currentMode, media) {
-    if (currentMode !== 'video' && currentMode !== 'mp3') return null
-    // quality 4320 means "best available" to the backend, so the warm-up does
-    // not have to wait for the metadata lookup to learn the exact resolution.
-    const plan = currentMode === 'mp3'
-      ? [{ key: `${rawUrl}|mp3|mp3`, mode: 'mp3' }]
-      : [{ key: `${rawUrl}|video|hd`, mode: 'video', quality: '4320' }]
-    let primary = null
-    plan.forEach(({ key, mode, quality }) => {
-      const cached = blobCacheRef.current.get(key)
-      if (cached) {
-        if (!primary) primary = Promise.resolve(cached)
-        return
-      }
-      const inflight = blobPrefetchRef.current.get(key)
-      if (inflight) {
-        if (!primary) primary = inflight
-        return
-      }
-      const promise = prepareBlob({ url: rawUrl, quality, mode, media })
-      blobPrefetchRef.current.set(key, promise)
-      if (!primary) primary = promise
-      promise
-        .then((base) => blobCacheRef.current.set(key, base))
-        .catch(() => {
-          // Best effort — a normal click still fetches and surfaces any error.
-        })
-        .finally(() => blobPrefetchRef.current.delete(key))
+  async function postJson(path, body, signal) {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      ...(signal ? { signal } : {}),
     })
-    // Callers can wait for this before showing options, so the file is already
-    // complete when the ad opens.
-    return primary
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
+    return payload
   }
 
-  function prefetchDirectBlob(result) {
-    const key = `direct|${result.url}`
-    if (blobCacheRef.current.has(key) || blobPrefetchRef.current.has(key)) return
-    const promise = fetchVideo(result.url).then(({ blob, contentType }) => ({
-      blob,
-      name: videoFilename(result.url, contentType, result.filename),
-      size: blob.size,
-    }))
-    blobPrefetchRef.current.set(key, promise)
-    promise
-      .then((base) => blobCacheRef.current.set(key, base))
-      .catch(() => {
-        // Best effort — the real click still reports failures.
-      })
-      .finally(() => blobPrefetchRef.current.delete(key))
+  // Fire-and-forget warm-up. Repeating it for the same file is free: the server
+  // reuses the in-flight job or the cached result.
+  function kickPrepare(params) {
+    if (!params?.url) return
+    // A later warm-up carrying resolved CDN URLs is a distinct (better) request;
+    // the server still de-duplicates it by the real file cache key.
+    const key = [params.url, params.mode, params.quality, params.storyId || '', params.media ? 'm' : ''].join('|')
+    if (preparedRef.current.has(key)) return
+    preparedRef.current.add(key)
+    postJson('/api/video/prepare', params)
+      .then(() => { /* warm-up is best effort */ })
+      .catch(() => preparedRef.current.delete(key))
   }
 
-  function cachedBlobJob(key) {
-    const hit = blobCacheRef.current.get(key)
-    if (hit) return Promise.resolve({ ...hit, objectUrl: URL.createObjectURL(hit.blob) })
-    // Reuse the warm-up already in flight instead of starting a second download.
-    const inflight = blobPrefetchRef.current.get(key)
-    if (inflight) {
-      return inflight.then((base) => ({ ...base, objectUrl: URL.createObjectURL(base.blob) }))
-    }
-    return null
+  // GET means the browser owns the transfer: it streams to the Downloads folder
+  // and never asks JavaScript to hold the whole file in memory.
+  function buildDownloadUrl(params) {
+    const query = new URLSearchParams({
+      url: params.url,
+      mode: params.mode,
+      quality: params.quality || '720',
+    })
+    if (params.storyId) query.set('storyId', params.storyId)
+    if (params.variant) query.set('variant', params.variant)
+    return `/api/video/download?${query.toString()}`
   }
 
-  // Preview uses the file that was already prepared for saving — no second
-  // download and no extra request to TikTok.
-  function preparedKey() {
-    if (!info) return ''
-    return info.kind === 'direct'
-      ? `direct|${info.url}`
-      : mode === 'mp3'
-        ? `${info.url}|mp3|mp3`
-        : `${info.url}|video|hd`
+  function triggerBrowserDownload(href, filename) {
+    const anchor = document.createElement('a')
+    anchor.href = href
+    if (filename) anchor.download = filename
+    anchor.rel = 'noopener'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
   }
-
-  function preparedBlob() {
-    if (blobRef.current) return blobRef.current
-    const key = preparedKey()
-    return key ? blobCacheRef.current.get(key)?.blob || null : null
-  }
-
-  function closePreview() {
-    if (previewObjectUrlRef.current) {
-      URL.revokeObjectURL(previewObjectUrlRef.current)
-      previewObjectUrlRef.current = ''
-    }
-    setPreviewOpen(false)
-    setPreviewSrc('')
-  }
-
-  async function openPreview() {
-    let blob = preparedBlob()
-    if (!blob) {
-      const inflight = blobPrefetchRef.current.get(preparedKey())
-      if (inflight) {
-        showToast('Preparing preview…')
-        try {
-          blob = (await inflight).blob
-        } catch {
-          // Fall back to the cover below if the warm-up failed.
-        }
-      }
-    }
-    if (blob) {
-      const src = URL.createObjectURL(blob)
-      if (previewObjectUrlRef.current) URL.revokeObjectURL(previewObjectUrlRef.current)
-      previewObjectUrlRef.current = src
-      setPreviewIsVideo(true)
-      setPreviewSrc(src)
-    } else if (remoteInfo?.thumbnail) {
-      // The prepared file may still be warming up — show the cover for now.
-      setPreviewIsVideo(false)
-      setPreviewSrc(remoteInfo.thumbnail)
-    } else {
-      showToast('Preview is still preparing — try again in a moment')
-      return
-    }
-    setPreviewOpen(true)
-  }
-
-  useEffect(() => {
-    if (!previewOpen) return undefined
-    function onKeyDown(event) {
-      if (event.key === 'Escape') closePreview()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [previewOpen])
-
-  useEffect(() => () => {
-    if (previewObjectUrlRef.current) URL.revokeObjectURL(previewObjectUrlRef.current)
-  }, [])
-
-  // Save the Blob directly from the browser — no preview page.
-  function startBlobDownload(objectUrl, name) {
-    if (!objectUrl || !name) return
-    const link = document.createElement('a')
-    link.href = objectUrl
-    link.download = name
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-  }
-
-  // Save straight to the device's default Downloads folder — this works in
-  // every browser and keeps the save immediate after the ad is closed.
-  async function saveWithPermission(blob, name) {
-    if (!blob || !name) return 'missing'
-    const objectUrl = URL.createObjectURL(blob)
-    replaceBlobUrl(objectUrl)
-    startBlobDownload(objectUrl, name)
-    return 'direct'
-  }
-
-  useEffect(() => {
-    // Only used to give a clearer hint when the helper service is unreachable.
-    fetch('/api/health')
-      .then((response) => setServiceReady(response.ok))
-      .catch(() => setServiceReady(false))
-    // A returning visitor often uses the same clip. Warm it on load so the
-    // file is already waiting by the time the ad appears.
-    try {
-      const last = window.localStorage.getItem('tiktok-video-last-link')
-      if (last) prefetchInfo(last, 'video')
-    } catch {
-      // Storage can be disabled — warm-up is best effort only.
-    }
-  }, [])
 
   function rememberLink(value) {
     try {
       window.localStorage.setItem('tiktok-video-last-link', value)
     } catch {
-      // Ignore private-mode storage errors.
+      // Storage can be disabled — this is only a warm-up hint.
     }
   }
 
-  // Start reading the link the moment it appears — no debounce. A paste can
-  // also kick this off before React re-renders, so the network wait overlaps
-  // with the visitor's click on Download.
+  function defaultPrepareParams(link, metadata) {
+    // Never start a file job before /info answers: a hint-less job can only
+    // resolve the link the slow way and ends up racing the real CDN job.
+    if (!metadata) return []
+    const base = {
+      url: link.url,
+      variant: metadata.variant || variantRef.current,
+      media: metadata.media,
+    }
+    const heights = (metadata.formats || [])
+      .map((item) => Number(item.height))
+      .filter((height) => Number.isFinite(height) && height > 0)
+    const qualities = heights.length
+      ? [...new Set(heights.map(String))]
+      : [String(metadata.formats?.[0]?.height || '720')]
+    return [
+      ...qualities.map((quality) => ({ ...base, mode: 'video', quality })),
+      { ...base, mode: 'mp3', quality: '720' },
+    ]
+  }
+
+  // Start reading metadata the moment the link appears — no spinner on click.
   function prefetchInfo(rawUrl, currentMode) {
     const result = classifyUrl(rawUrl)
     if (!result.valid) return
-    if (result.kind === 'direct') {
-      prefetchDirectBlob(result)
-      return
-    }
     if (result.kind !== 'social') return
     const key = `${result.url}|${currentMode}`
     if (prefetchRef.current.has(key) || prefetchKeyRef.current === key) return
@@ -548,23 +276,12 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     prefetchAbortRef.current = controller
     prefetchKeyRef.current = key
 
-    // Start the file warm-up BEFORE the metadata request. The download endpoint
-    // can resolve the link itself, so the 3–5s preparation now overlaps the
-    // info lookup instead of starting after it. By the time the options appear
-    // and the 4s ad finishes, the Blob is normally already cached. If this
-    // server attempt fails, the call below with `media` retries via the CDN.
-    prefetchBlobs(result.url, currentMode)
-    // In video mode the MP3 button is also one tap away. Warming both here
-    // means whichever option the visitor picks, the file is already prepared
-    // while the ad runs — no preparation waits for the 4s beat to finish.
-    if (currentMode === 'video') prefetchBlobs(result.url, 'mp3')
-
-    // Metadata is looked up once. When it lands we only reuse/upgrade the warm
-    // file above — no second download starts if it is already prepared.
-    const promise = postJsonWithRetry(
+    // /info resolves the real CDN mirrors. File preparation starts the moment
+    // it answers (see applyInfo / the .then below), not before — a hint-less
+    // download would duplicate the same bytes through a slower route.
+    const promise = postJson(
       '/api/video/info',
       { url: result.url, mode: currentMode },
-      3,
       controller.signal,
     )
       .then((body) => {
@@ -572,14 +289,28 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         prefetchRef.current.set(key, body)
         if (body.variant) variantRef.current = body.variant
         rememberLink(result.url)
-        prefetchBlobs(result.url, currentMode, body.media)
-        if (currentMode === 'video') prefetchBlobs(result.url, 'mp3', body.media)
+        defaultPrepareParams(result, body).forEach(kickPrepare)
+        return body
       })
       .catch(() => {
-        // Best effort only — the real click still surfaces any error.
+        // Best effort — provisional options on screen stay usable.
       })
     prefetchPromiseRef.current = { key, promise }
   }
+
+  useEffect(() => {
+    // A returning visitor often uses the same clip. Warm it on load so the file
+    // is already waiting by the time the ad appears.
+    fetch('/api/health')
+      .then((response) => setServiceReady(response.ok))
+      .catch(() => setServiceReady(false))
+    try {
+      const last = window.localStorage.getItem('tiktok-video-last-link')
+      if (last) prefetchInfo(last, 'video')
+    } catch {
+      // Storage can be disabled — warm-up is best effort only.
+    }
+  }, [])
 
   useEffect(() => {
     if (state !== 'idle') return undefined
@@ -598,30 +329,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     () => () => {
       prefetchAbortRef.current?.abort()
       abortRef.current?.abort()
-      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current)
     },
     [],
   )
 
-  // Pick a sane default from the resolutions this video actually offers.
+  // Keep the result panel in view, but never add a delay before it renders.
   useEffect(() => {
-    const heights = (remoteInfo?.formats || [])
-      .map((item) => Number(item.height))
-      .filter((height) => Number.isFinite(height) && height > 0)
-    if (!heights.length) return
-    setQuality(String(Math.max(...heights)))
-  }, [remoteInfo])
-
-  useEffect(() => {
-    const stories = remoteInfo?.stories || []
-    setStoryId(stories.length ? String(stories[0].id) : '')
-  }, [remoteInfo])
-
-  // The result replaces the hero. Center the whole card so the thumbnail and
-  // every format option are visible at once — centering only the options used
-  // to push the heading off the top of the screen.
-  useEffect(() => {
-    if (state !== 'social' && state !== 'direct' && state !== 'ready') return
+    if (state !== 'social' && state !== 'direct') return
     const timer = window.setTimeout(() => {
       const target = resultPanelRef.current
       if (!target) return
@@ -632,32 +346,24 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     return () => window.clearTimeout(timer)
   }, [state])
 
-  // Let the page hide its intro heading while a result is on screen.
   useEffect(() => {
     onResultStateChange?.(state !== 'idle')
   }, [state, onResultStateChange])
 
   function clearResult() {
-    if (downloadJobRef.current) {
-      abortRef.current?.abort()
-      downloadJobRef.current = null
-    }
-    jobPendingRef.current = false
-    setJobPending(false)
-    setOpening(false)
-    replaceBlobUrl(null)
-    blobRef.current = null
-    setFileName('')
-    setFileSize(0)
-    setError('')
+    abortRef.current?.abort()
     setInfo(null)
     setRemoteInfo(null)
+    setInfoLoading(false)
+    setError('')
     setQuality('720')
     setStoryId('')
+    setLastRequest(null)
+    lastRequestRef.current = null
+    pendingActionRef.current = null
   }
 
   function resetAll() {
-    abortRef.current?.abort()
     clearResult()
     setUrl('')
     setState('idle')
@@ -665,13 +371,11 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
   function handleModeChange(next) {
     if (next === mode) return
-    abortRef.current?.abort()
     clearResult()
     setMode(next)
     setState('idle')
   }
 
-  // Show the interstitial before the final download.
   function runWithAd(action) {
     const ad = ADS.vignette
     if (
@@ -687,8 +391,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   }
 
   function closeVignette() {
-    // Fixed 4s beat: Close never waits on the job. finishDownload() awaits the
-    // background work, so a large file can keep preparing after the ad closes.
+    // The ad is a fixed 4s beat. Close only triggers a URL visit — no await.
     setVignetteOpen(false)
     vignetteShownRef.current = true
     const action = pendingActionRef.current
@@ -711,232 +414,134 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
   }
 
-  async function handleSubmit(event) {
+  function applyInfo(body, link) {
+    if (!body) return
+    setRemoteInfo(body)
+    if (body.variant) variantRef.current = body.variant
+    rememberLink(link.url)
+    const heights = (body.formats || [])
+      .map((item) => Number(item.height))
+      .filter((height) => Number.isFinite(height) && height > 0)
+    if (heights.length) setQuality(String(Math.max(...heights)))
+    const firstStory = body.stories?.[0]?.id
+    if (firstStory != null) setStoryId(String(firstStory))
+    defaultPrepareParams(link, body).forEach(kickPrepare)
+  }
+
+  function handleSubmit(event) {
     event.preventDefault()
     clearResult()
 
     const result = classifyUrl(url)
     if (!result.valid) {
-      setState('error')
+      setInfo(result)
       setError(result.error)
+      setState('error')
       return
     }
 
     setInfo(result)
 
     if (result.kind === 'social') {
-      // Covers typing/pasting and clicking Download in the same tick, before
-      // any debounced prefetch fires. The ad starts on option tap, so getting
-      // the file warming now is what makes Close feel like an instant save.
-      prefetchBlobs(result.url, mode)
-      if (mode === 'video') prefetchBlobs(result.url, 'mp3')
-
       const key = `${result.url}|${mode}`
       const cachedBody = prefetchRef.current.get(key)
-      const inflight = prefetchPromiseRef.current
-
-      // Render the result panel on this same tick. Exact sizes/thumbnail fill
-      // in as soon as metadata lands, but the visitor never watches a spinner
-      // after pressing Download — the click always feels instant.
+      // Render on this tick. Exact sizes/thumbnail fill in when metadata lands,
+      // but the visitor never watches a spinner after pressing Download.
       setRemoteInfo(cachedBody || null)
-      setOpening(false)
       setState('social')
-
-      const applyBody = (body) => {
-        if (!body) return
-        setRemoteInfo(body)
-        if (body.variant) variantRef.current = body.variant
-        rememberLink(result.url)
-        // Reuse/upgrade the file already warming from the paste — no second
-        // download starts here.
-        prefetchBlobs(result.url, mode, body.media)
-        if (mode === 'video') prefetchBlobs(result.url, 'mp3', body.media)
-
-        const heights = (body.formats || [])
-          .map((item) => Number(item.height))
-          .filter((height) => Number.isFinite(height) && height > 0)
-        if (heights.length) setQuality(String(Math.max(...heights)))
-        const firstStory = body.stories?.[0]?.id
-        if (firstStory != null) setStoryId(String(firstStory))
-      }
+      defaultPrepareParams(result, cachedBody).forEach(kickPrepare)
 
       if (cachedBody) {
-        applyBody(cachedBody)
-      } else {
-        // Reuse the lookup already started on paste instead of firing a second
-        // one. A failed lookup must not blank the options — the download
-        // endpoint can still resolve the link on its own.
-        const promise = inflight?.key === key
-          ? inflight.promise
-          : postJsonWithRetry('/api/video/info', { url: result.url, mode })
-        promise
-          .then((body) => applyBody(body || prefetchRef.current.get(key)))
-          .catch(() => { /* provisional options stay usable */ })
+        applyInfo(cachedBody, result)
+        return
       }
+      const controller = new AbortController()
+      abortRef.current = controller
+      setInfoLoading(true)
+      const inFlight = prefetchPromiseRef.current
+      const promise = inFlight?.key === key
+        ? inFlight.promise
+        : postJson('/api/video/info', { url: result.url, mode }, controller.signal)
+      promise
+        .then((body) => {
+          if (controller.signal.aborted) return
+          applyInfo(body || prefetchRef.current.get(key), result)
+        })
+        .catch(() => { /* provisional options stay usable */ })
+        .finally(() => {
+          if (!controller.signal.aborted) setInfoLoading(false)
+        })
       return
     }
 
-    // Direct link — show one save option first; the file is prepared on tap.
     setState('direct')
   }
 
-  // Files are prepared in the background while the ad is open. Nothing is saved
-  // automatically — the visitor always confirms where the file should go.
-  function fetchDirectBlob(result) {
-    const warm = cachedBlobJob(`direct|${result.url}`)
-    if (warm) return warm
-    const controller = new AbortController()
-    abortRef.current = controller
-    return fetchVideo(result.url, { signal: controller.signal })
-      .then(({ blob, contentType }) => ({
-        blob,
-        objectUrl: URL.createObjectURL(blob),
-        name: videoFilename(result.url, contentType, result.filename),
-        size: blob.size,
-      }))
-      .finally(() => {
-        if (abortRef.current === controller) abortRef.current = null
-      })
-  }
-
-  async function fetchSocialBlob({
-    quality: wantedQuality = quality,
-    mode: wantedMode = mode,
-    storyId: wantedStory = storyId,
-    link = info,
-  } = {}) {
-    if (!link) throw new Error('Link not found.')
-    const controller = new AbortController()
-    abortRef.current = controller
-    try {
-      const base = await prepareBlob({
-        url: link.url,
-        quality: wantedQuality,
-        mode: wantedMode,
-        storyId: wantedStory,
-        platform: link.platform,
-        signal: controller.signal,
-        media: remoteInfo?.media,
-      })
-      return { ...base, objectUrl: URL.createObjectURL(base.blob) }
-    } finally {
-      if (abortRef.current === controller) abortRef.current = null
-    }
-  }
-
-  function startJob(job, kind) {
-    if (downloadJobRef.current) return
-
-    // The ad runs on its fixed 4s beat. This job may still be preparing when
-    // Close is tapped; finishDownload() awaits it before saving the file.
-    let timer
-    const guarded = new Promise((resolve, reject) => {
-      const settle = (error) => {
-        window.clearTimeout(timer)
-        reject(error)
-      }
-      timer = window.setTimeout(() => {
-        abortRef.current?.abort()
-        settle(new Error('The download is taking too long. Please try again.'))
-      }, JOB_TIMEOUT_MS)
-      job.then(
-        (value) => {
-          window.clearTimeout(timer)
-          resolve(value)
-        },
-        settle,
-      )
-    })
-
-    downloadJobRef.current = guarded
-    jobPendingRef.current = true
-    setJobPending(true)
-    guarded.then(
-      () => {
-        jobPendingRef.current = false
-        setJobPending(false)
-      },
-      () => {
-        jobPendingRef.current = false
-        setJobPending(false)
-      },
-    )
-    // Ad opens on the same tick as the tap. The file was already warmed from
-    // the paste, so the 4s ad beat is what covers any remaining transfer.
-    runWithAd(() => finishDownload(guarded, kind))
-  }
-
-  // Reuse a file that was prepared while the visitor was reading the options.
-  function warmJob(kind) {
-    if (!info || info.kind === 'direct') return null
-    if (kind === 'hd') return cachedBlobJob(`${info.url}|video|hd`)
-    if (kind === 'mp3') return cachedBlobJob(`${info.url}|mp3|mp3`)
-    return null
-  }
-
-  // Option tap starts the already-warmed job and the ad in the same tick —
-  // no waiting before the ad. The file keeps preparing behind the ad; Close
-  // still appears on the fixed 4s beat and the save waits for the job.
+  // A tap prepares the file (again, idempotently) and opens the ad in the same
+  // tick. Nothing waits on the preparation before the ad appears.
   function handleSaveOption(kind) {
-    if (downloadJobRef.current || !info) return
-    if (kind === 'direct') {
-      startJob(fetchDirectBlob(info), 'direct')
-    } else if (kind === 'sd') {
-      startJob(warmJob(kind) || fetchSocialBlob({ quality: sdQuality, mode: 'video' }), 'social')
+    if (vignetteOpen || !info) return
+    let params
+    if (info.kind === 'direct') {
+      params = { kind: 'direct', url: info.url, filename: info.filename, mode: 'video', quality: '720' }
     } else if (kind === 'mp3') {
-      startJob(warmJob(kind) || fetchSocialBlob({ mode: 'mp3' }), 'social')
+      params = { kind, url: info.url, mode: 'mp3', quality: '720', variant: variantRef.current }
     } else if (kind === 'story') {
-      startJob(fetchSocialBlob({ mode: 'story', storyId }), 'social')
+      params = { kind, url: info.url, mode: 'story', quality: '720', storyId, variant: variantRef.current }
     } else {
-      startJob(warmJob('hd') || fetchSocialBlob({ quality, mode: 'video' }), 'social')
+      const chosen = kind === 'sd' ? sdQuality : selectedQuality?.value || quality
+      params = { kind, url: info.url, mode: 'video', quality: chosen, variant: variantRef.current }
     }
+    lastRequestRef.current = params
+    setLastRequest(params)
+    kickPrepare({
+      url: params.url,
+      mode: params.mode,
+      quality: params.quality,
+      storyId: params.storyId,
+      variant: params.variant,
+      media: remoteInfo?.media,
+    })
+    runWithAd(() => startDownload(params))
   }
 
-  function saveResultToast(result) {
-    if (result === 'direct') showToast('Download started')
-    else if (result !== 'missing') showToast('File saved')
+  function startDownload(params) {
+    if (!params) return
+    if (params.kind === 'direct') {
+      triggerBrowserDownload(params.url, params.filename)
+    } else {
+      triggerBrowserDownload(buildDownloadUrl(params))
+    }
+    showToast('Download started')
   }
 
   function handleSaveAgain() {
-    if (!blobRef.current) return
-    saveWithPermission(blobRef.current, fileName).then(saveResultToast)
+    startDownload(lastRequest || lastRequestRef.current)
   }
 
-  // Called only from the ad's Close button, so the save keeps its user gesture.
-  async function finishDownload(job, kind) {
-    // Close is on a fixed ad beat. If a large file is still warming up, say so
-    // immediately — the tap should never look frozen for several seconds.
-    if (jobPendingRef.current) showToast('Preparing your file…')
-    try {
-      const { blob, objectUrl, name, size } = await job
-      blobRef.current = blob
-      replaceBlobUrl(objectUrl)
-      setFileName(name)
-      setFileSize(size)
-
-      const saved = await saveWithPermission(blob, name)
-      saveResultToast(saved)
-      // The file is on its way — go back to the format options instead of
-      // parking the visitor on a "File ready to save" screen.
-      setState(kind === 'direct' ? 'direct' : 'social')
-    } catch (cause) {
-      if (cause.name === 'AbortError') {
-        setState('idle')
-      } else if (kind === 'direct') {
-        setState('error')
-        setError(
-          cause instanceof TypeError
-            ? 'The browser blocked this download (CORS). Try another CDN-hosted direct link.'
-            : cause.message || 'Download failed.',
-        )
-      } else {
-        setError(cause.message || 'Download failed.')
-        setState('unsupported')
-      }
-    } finally {
-      if (downloadJobRef.current === job) downloadJobRef.current = null
+  function openPreview() {
+    const video = remoteInfo?.media?.video
+    if (video) {
+      setPreviewIsVideo(true)
+      setPreviewSrc(video)
+    } else if (remoteInfo?.thumbnail) {
+      setPreviewIsVideo(false)
+      setPreviewSrc(remoteInfo.thumbnail)
+    } else {
+      showToast('Preview is still loading — try again in a moment')
+      return
     }
+    setPreviewOpen(true)
   }
+
+  useEffect(() => {
+    if (!previewOpen) return undefined
+    function onKeyDown(event) {
+      if (event.key === 'Escape') setPreviewOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [previewOpen])
 
   const qualityOptions = (remoteInfo?.formats || []).length
     ? remoteInfo.formats.map((item) => ({
@@ -1030,15 +635,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             </button>
             <button
               type="submit"
-              disabled={state === 'analyzing' || opening}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0d9488] px-6 py-4 text-base font-semibold text-white shadow-lg shadow-teal-900/20 transition hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:min-w-[9rem]"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0d9488] px-6 py-4 text-base font-semibold text-white shadow-lg shadow-teal-900/20 transition hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:w-auto sm:min-w-[9rem]"
             >
-              {state === 'analyzing' || opening ? (
-                <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-              ) : (
-                <Download className="h-5 w-5" aria-hidden="true" />
-              )}
-              {state === 'analyzing' || opening ? 'Opening…' : 'Download'}
+              <Download className="h-5 w-5" aria-hidden="true" />
+              Download
             </button>
           </div>
 
@@ -1109,7 +709,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       </section>
       )}
 
-      {/* ---------- Result: shown only after Download is clicked ---------- */}
+      {/* ---------- Result: rendered on the same tick as the click ---------- */}
       {state !== 'idle' && (
       <section ref={resultPanelRef} className="card-surface scroll-mt-4 p-5 sm:p-6">
         <div className="mb-5 flex items-center justify-between">
@@ -1125,15 +725,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </div>
 
         <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 rounded-2xl bg-slate-50 p-5 text-center ring-1 ring-inset ring-slate-200">
-          {state === 'analyzing' && (
-            <div className="w-full max-w-sm">
-              <Loader2 className="mx-auto h-8 w-8 animate-spin text-teal-600" aria-hidden="true" />
-              <p className="mt-3 animate-pulse text-xs font-semibold text-slate-600 motion-reduce:animate-none">
-                Opening your formats…
-              </p>
-            </div>
-          )}
-
           {state === 'unsupported' && info && (
             <div className="w-full max-w-sm">
               <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-amber-500/10 text-amber-700 ring-1 ring-inset ring-amber-400/20">
@@ -1144,142 +735,138 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               </p>
               <p className="mt-2 text-xs leading-relaxed text-slate-500">
                 {serviceReady ? (
-                  <>
-                    This link could not be processed. The platform may be blocking the request, or the
-                    clip may be private or restricted — see the details below.
-                  </>
+                  <>This link could not be processed. The platform may be blocking the request, or the clip may be private or restricted.</>
                 ) : (
                   <>The download service is unavailable right now. Start the local helper and try again.</>
                 )}
               </p>
               {error && <p className="mt-3 break-words text-[11px] text-rose-600">{error}</p>}
-              <div className="mt-4 flex flex-wrap justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleSubmit({ preventDefault() {} })}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl ss-gradient px-4 py-2.5 text-xs font-semibold text-white shadow-md shadow-teal-500/20 transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                  Try again
-                </button>
-              </div>
             </div>
           )}
 
-          {state === 'social' && remoteInfo && (
+          {state === 'social' && info && (
             <div className="grid w-full max-w-3xl gap-5 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
               <div className="min-w-0">
-              {remoteInfo.thumbnail && (
-                <div className="relative">
-                  <img
-                    src={remoteInfo.thumbnail}
-                    alt=""
-                    className="animate-preview-in mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg motion-reduce:animate-none sm:mx-0"
-                  />
-                  <button
-                    type="button"
-                    onClick={openPreview}
-                    aria-label="Preview this video"
-                    className="absolute inset-0 m-auto flex h-fit w-fit items-center gap-1.5 rounded-full bg-slate-900/75 px-3 py-2 text-[11px] font-bold text-white shadow-lg ring-1 ring-white/40 backdrop-blur-sm transition hover:bg-slate-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                  >
-                    <Play className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
-                    Preview
-                  </button>
-                </div>
-              )}
-              <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-                <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-teal-600">
-                  {remoteInfo.platform || 'TikTok'}
-                </span>
-                {remoteInfo.duration ? (
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
-                    {formatDuration(remoteInfo.duration)}
-                  </span>
-                ) : null}
-                <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-600">
-                  No watermark
-                </span>
-              </div>
-              <p className="mt-3 text-sm font-bold text-slate-900">
-                {remoteInfo.uploader || 'TikTok video'}
-              </p>
-              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">
-                {remoteInfo.title}
-              </p>
-
-              {mode === 'video' ? (
-                <div className="mt-5">
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Available qualities
-                  </p>
-                  <div role="group" aria-label="Video quality" className="space-y-2">
-                    {qualityOptions.map((item, index) => (
-                      <button
-                        key={item.value}
-                        type="button"
-                        aria-pressed={quality === item.value}
-                        onClick={() => setQuality(item.value)}
-                        style={{ animationDelay: `${index * 45}ms` }}
-                        className={`animate-option-in flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[11px] font-bold transition active:scale-[0.99] motion-reduce:animate-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
-                          quality === item.value
-                            ? 'border-teal-400/50 bg-teal-500/15 text-slate-900 shadow-sm'
-                            : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-teal-400/40 hover:text-slate-900'
-                        }`}
-                      >
-                        <span>{item.label}</span>
-                        {item.size > 0 && (
-                          <span className="text-[10px] font-semibold opacity-60">
-                            {formatBytes(item.size)}
-                          </span>
-                        )}
-                      </button>
-                    ))}
+                {remoteInfo?.thumbnail ? (
+                  <div className="relative">
+                    <img
+                      src={remoteInfo.thumbnail}
+                      alt=""
+                      className="animate-preview-in mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg motion-reduce:animate-none sm:mx-0"
+                    />
+                    <button
+                      type="button"
+                      onClick={openPreview}
+                      aria-label="Preview this video"
+                      className="absolute inset-0 m-auto flex h-fit w-fit items-center gap-1.5 rounded-full bg-slate-900/75 px-3 py-2 text-[11px] font-bold text-white shadow-lg ring-1 ring-white/40 backdrop-blur-sm transition hover:bg-slate-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                    >
+                      <Play className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
+                      Preview
+                    </button>
                   </div>
-                  <p className="mt-2 text-[10px] text-slate-500">
-                    Only the qualities this video actually offers are shown.
-                  </p>
+                ) : (
+                  <div className="flex h-40 items-center justify-center rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 sm:h-56">
+                    <Video className="h-10 w-10 text-slate-400" aria-hidden="true" />
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+                  <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-teal-600">
+                    {remoteInfo?.platform || info.platform || 'TikTok'}
+                  </span>
+                  {remoteInfo?.duration ? (
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
+                      {formatDuration(remoteInfo.duration)}
+                    </span>
+                  ) : null}
+                  <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-600">
+                    No watermark
+                  </span>
+                  {infoLoading && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
+                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                      Details
+                    </span>
+                  )}
                 </div>
-              ) : mode === 'mp3' ? (
-                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] font-semibold text-slate-500">
-                  Audio only · 192 kbps MP3
-                </div>
-              ) : (
-                <div className="mt-5">
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Active stories — choose one
-                  </p>
-                  {(remoteInfo?.stories || []).length ? (
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {remoteInfo.stories.map((item) => (
+                <p className="mt-3 text-sm font-bold text-slate-900">
+                  {remoteInfo?.uploader || 'TikTok video'}
+                </p>
+                <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">
+                  {remoteInfo?.title || 'Your file is being prepared in the background.'}
+                </p>
+
+                {mode === 'video' ? (
+                  <div className="mt-5">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Available qualities
+                    </p>
+                    <div role="group" aria-label="Video quality" className="space-y-2">
+                      {qualityOptions.map((item, index) => (
                         <button
-                          key={item.id}
+                          key={item.value}
                           type="button"
-                          aria-pressed={String(storyId) === String(item.id)}
-                          onClick={() => setStoryId(String(item.id))}
-                          className={`h-24 w-16 overflow-hidden rounded-xl border-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
-                            String(storyId) === String(item.id)
-                              ? 'border-teal-500 shadow-lg shadow-teal-500/20'
-                              : 'border-slate-200 opacity-70 hover:opacity-100'
+                          aria-pressed={quality === item.value}
+                          onClick={() => setQuality(item.value)}
+                          style={{ animationDelay: `${index * 45}ms` }}
+                          className={`animate-option-in flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[11px] font-bold transition active:scale-[0.99] motion-reduce:animate-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                            quality === item.value
+                              ? 'border-teal-400/50 bg-teal-500/15 text-slate-900 shadow-sm'
+                              : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-teal-400/40 hover:text-slate-900'
                           }`}
                         >
-                          {item.thumbnail ? (
-                            <img src={item.thumbnail} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <span className="grid h-full w-full place-items-center bg-slate-100 text-[9px] font-bold text-slate-500">
-                              {item.type === 'image' ? 'PHOTO' : 'VIDEO'}
+                          <span>{item.label}</span>
+                          {item.size > 0 && (
+                            <span className="text-[10px] font-semibold opacity-60">
+                              {formatBytes(item.size)}
                             </span>
                           )}
                         </button>
                       ))}
                     </div>
-                  ) : (
-                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] text-slate-500">
-                      No active stories on this profile.
+                    <p className="mt-2 text-[10px] text-slate-500">
+                      Only the qualities this video actually offers are shown.
                     </p>
-                  )}
-                </div>
-              )}
-
+                  </div>
+                ) : mode === 'mp3' ? (
+                  <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] font-semibold text-slate-500">
+                    Audio only · 192 kbps MP3
+                  </div>
+                ) : (
+                  <div className="mt-5">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Active stories — choose one
+                    </p>
+                    {(remoteInfo?.stories || []).length ? (
+                      <div className="flex flex-wrap justify-center gap-2">
+                        {remoteInfo.stories.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            aria-pressed={String(storyId) === String(item.id)}
+                            onClick={() => setStoryId(String(item.id))}
+                            className={`h-24 w-16 overflow-hidden rounded-xl border-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
+                              String(storyId) === String(item.id)
+                                ? 'border-teal-500 shadow-lg shadow-teal-500/20'
+                                : 'border-slate-200 opacity-70 hover:opacity-100'
+                            }`}
+                          >
+                            {item.thumbnail ? (
+                              <img src={item.thumbnail} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <span className="grid h-full w-full place-items-center bg-slate-100 text-[9px] font-bold text-slate-500">
+                                {item.type === 'image' ? 'PHOTO' : 'VIDEO'}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] text-slate-500">
+                        {infoLoading ? 'Loading stories…' : 'No active stories on this profile.'}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="mx-auto w-full max-w-md min-w-0 self-center">
@@ -1345,6 +932,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                     </button>
                   )}
                 </div>
+                <button
+                  type="button"
+                  onClick={handleSaveAgain}
+                  disabled={!lastRequest}
+                  className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Save again
+                </button>
               </div>
             </div>
           )}
@@ -1367,6 +962,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                 >
                   {optionContent('Save file', 'Original file')}
                 </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAgain}
+                  disabled={!lastRequest}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Save again
+                </button>
               </div>
             </div>
           )}
@@ -1378,43 +981,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               </span>
               <p className="mt-4 text-sm font-bold text-rose-600">Couldn’t download that</p>
               <p className="mt-2 break-words text-xs leading-relaxed text-slate-500">{error}</p>
-            </div>
-          )}
-
-          {state === 'ready' && blobUrl && (
-            <div className="w-full max-w-sm">
-              <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-500/10 text-emerald-600 ring-1 ring-inset ring-emerald-400/20">
-                <Check className="h-7 w-7" aria-hidden="true" />
-              </span>
-              <p className="mt-4 text-sm font-bold text-slate-900">File ready to save</p>
-              <p className="mt-1 text-xs text-slate-500">
-                Saved to your default Downloads folder. Use the buttons below to save it again.
-              </p>
-              <p className="mt-3 truncate font-mono text-xs text-slate-500" title={fileName}>
-                {fileName}
-              </p>
-              {fileSize > 0 && (
-                <p className="mt-1 text-[11px] font-semibold text-teal-600">
-                  File size: {formatBytes(fileSize)}
-                </p>
-              )}
-              <div className="mt-4 space-y-2">
-                <button
-                  type="button"
-                  onClick={() => handleSaveAgain()}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#0d9488] to-[#14b8a6] px-4 py-3 text-xs font-bold text-white shadow-lg shadow-teal-500/20 transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                >
-                  <Download className="h-4 w-4" aria-hidden="true" />
-                  Save file
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSaveAgain()}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-xs font-bold text-slate-700 transition hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                >
-                  Save to device (default folder)
-                </button>
-              </div>
             </div>
           )}
         </div>
@@ -1525,8 +1091,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </div>
       </section>
 
-      <BannerAd slot="afterHowTo" />
-
       {/* ---------- FAQ (directly above the footer area) ---------- */}
       <section className="card-surface p-5 sm:p-6">
         <Heading icon={Info} title="FAQ" subtitle="Common questions, quick answers" />
@@ -1558,13 +1122,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           aria-modal="true"
           aria-label="Video preview"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closePreview()
+            if (event.target === event.currentTarget) setPreviewOpen(false)
           }}
         >
           <div className="relative w-full max-w-3xl">
             <button
               type="button"
-              onClick={closePreview}
+              onClick={() => setPreviewOpen(false)}
               aria-label="Close preview"
               className="absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-900 shadow-lg transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
             >

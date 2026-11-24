@@ -18,6 +18,7 @@ from vercel_core import (  # noqa: E402
     cached_info,
     cache_info,
     client_ip,
+    error_category,
     fetch_stories,
     install_security_headers,
     log_failure,
@@ -42,20 +43,34 @@ def tikwm_result(tikwm):
     """Shape the TikWM response exactly like the yt-dlp metadata response."""
     author = tikwm.get("author") or {}
     size = tikwm.get("hd_size") or tikwm.get("size") or 0
+    try:
+        height = int(tikwm.get("height") or tikwm.get("video_height") or 0)
+    except (TypeError, ValueError):
+        height = 0
+    formats = []
+    if height > 0:
+        formats.append({
+            "height": height,
+            "label": f"{height}p",
+            "ext": "mp4",
+            "filesize": int(size or 0),
+        })
+    video_urls = tikwm_media_candidates(tikwm, "video")
     return {
         "title": tikwm.get("title") or "video",
         "duration": tikwm.get("duration"),
         "thumbnail": tikwm.get("cover") or tikwm.get("origin_cover"),
         "uploader": f"@{author.get('unique_id')}" if author.get("unique_id") else None,
         "platform": "TikTok",
-        "formats": [{"height": 720, "label": "HD", "ext": "mp4", "filesize": int(size)}],
+        "formats": formats,
         "variant": "tikwm",
         # Resolved CDN URLs are handed to /download so it never resolves twice.
         "media": {
             "video": tikwm_media(tikwm, "video"),
             "audio": tikwm_media(tikwm, "mp3"),
-            "video_alternates": tikwm_media_candidates(tikwm, "video"),
+            "video_alternates": video_urls,
             "audio_alternates": tikwm_media_candidates(tikwm, "mp3"),
+            "by_height": {str(height): video_urls} if height > 0 else {},
             "title": tikwm.get("title") or "tiktok",
             "id": tikwm.get("id") or "video",
             "uploader": author.get("unique_id") or author.get("nickname"),

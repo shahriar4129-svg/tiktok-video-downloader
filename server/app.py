@@ -10,7 +10,6 @@ Run:  python server/app.py
 Then: http://localhost:8000
 """
 
-import io
 import ipaddress
 import json
 import os
@@ -128,27 +127,39 @@ VIDEO_FORMATS = {
     "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
 }
 DEFAULT_QUALITY = "720"
-MAX_BYTES = 300 * 1024 * 1024
+# Keep the local helper in step with the shared cache/Vercel ceilings. A file
+# that cannot be cached cannot be prepared ahead of the ad beat.
+MAX_BYTES = 250 * 1024 * 1024
 
 
 def video_selector(height, tiktok=False, exact=False):
-    """Pick one already-muxed TikTok stream instead of muxing two again.
+    """Pick the requested resolution, not merely the highest bitrate below it.
 
     TikTok's app API returns progressive MP4s (picture + AAC in the same
     file) and a separate music-only track. `bestvideo+bestaudio` pairs the
     picture with that second track, which shifts the dialogue a few seconds
     out of sync in the saved file. H.264 wins over HEVC even at a lower height:
     HEVC needs a full re-encode that adds seconds after the ad.
+
+    When the visitor picked a resolution we know exists, try that exact height
+    first — otherwise `best[height<=1280]` silently saves a smaller 576x1024
+    file even though a 720x1280 stream was offered.
     """
-    bound = f"[height={height}]" if exact else f"[height<={height}]"
+    bounds = [f"[height={height}]", f"[height<={height}]"] if exact else [f"[height<={height}]"]
     if tiktok:
-        return (
-            f"best{bound}[vcodec^=h264][acodec!=none]/"
-            f"best{bound}[vcodec^=avc1][acodec!=none]/"
-            f"best{bound}[vcodec!=none][acodec!=none]/"
-            f"best{bound}[vcodec!=none]/best"
-        )
-    return f"bestvideo{bound}+bestaudio/best{bound}/best"
+        chains = []
+        for bound in bounds:
+            chains.extend((
+                f"best{bound}[vcodec^=h264][acodec!=none]",
+                f"best{bound}[vcodec^=avc1][acodec!=none]",
+                f"best{bound}[vcodec!=none][acodec!=none]",
+                f"best{bound}[vcodec!=none]",
+            ))
+        chains.append("best")
+        return "/".join(chains)
+    return "/".join(
+        f"bestvideo{bound}+bestaudio/best{bound}/best" for bound in bounds
+    )
 
 # yt-dlp metadata extraction costs a few seconds per link. Cache short-lived
 # results so re-opening the same link is instant — keep them on disk too so a
@@ -190,7 +201,7 @@ def limit_api_requests():
     path = request.path
     if not path.startswith("/api/video/"):
         return None
-    bucket = "download" if path.endswith("/download") else "info"
+    bucket = "download" if path.endswith(("/download", "/prepare")) else "info"
     if not rate_allowed(client_ip(request), bucket):
         return jsonify({"error": "Too many requests. Please try again in a few minutes."}), 429
     return None
@@ -291,6 +302,21 @@ def ensure_compatible_video(path, workdir):
         if "yuv420p10" not in video and "yuv444" not in video and "yuv420p" in video:
             return path
     output = os.path.join(workdir, "compatible.mp4")
+    # HEVC usually arrives inside an MP4 already. Copying the streams keeps the
+    # original picture and takes well under a second, while a full libx264 pass
+    # costs 20-40 seconds on a long clip — the visitor would feel that after the
+    # ad. Only re-encode when a clean remux is not possible.
+    if "mov,mp4" in info or ".mp4" in path.lower():
+        remux = os.path.join(workdir, "remux.mp4")
+        try:
+            subprocess.run(
+                [FFMPEG_DIR, "-y", "-loglevel", "error", "-i", path,
+                 "-c", "copy", "-tag:v", "hvc1", "-movflags", "+faststart", remux],
+                check=True, timeout=60, capture_output=True,
+            )
+            return remux
+        except Exception:
+            pass
     subprocess.run(
         [FFMPEG_DIR, "-y", "-loglevel", "error", "-fflags", "+genpts", "-i", path,
          "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast",
@@ -307,13 +333,25 @@ def tikwm_payload(data):
     size = data.get("hd_size") or data.get("size") or 0
     video_urls = tikwm_media_candidates(data, "video")
     audio_urls = tikwm_media_candidates(data, "mp3")
+    try:
+        height = int(data.get("height") or data.get("video_height") or 0)
+    except (TypeError, ValueError):
+        height = 0
+    formats = []
+    if height > 0:
+        formats.append({
+            "height": height,
+            "label": f"{height}p",
+            "ext": "mp4",
+            "filesize": int(size or 0),
+        })
     return {
         "title": data.get("title") or "video",
         "duration": data.get("duration"),
         "thumbnail": data.get("cover") or data.get("origin_cover"),
         "uploader": f"@{author.get('unique_id')}" if author.get("unique_id") else None,
         "platform": "TikTok",
-        "formats": [{"height": 720, "label": "HD", "ext": "mp4", "filesize": int(size)}],
+        "formats": formats,
         "variant": "tikwm",
         # Hand the resolved CDN mirrors to /download so it never has to resolve
         # the same link twice.
@@ -322,6 +360,7 @@ def tikwm_payload(data):
             "audio": audio_urls[0] if audio_urls else None,
             "video_alternates": video_urls,
             "audio_alternates": audio_urls,
+            "by_height": {str(height): video_urls} if height > 0 else {},
             "title": data.get("title") or "tiktok",
             "id": data.get("id") or "video",
             "uploader": author.get("unique_id") or author.get("nickname"),
@@ -380,13 +419,17 @@ def ydl_options(outtmpl=None, variant="app22", mode="video", fast=False):
 STRATEGIES = ("app22", "app16", "aweme1128", "app21", "safari", "web")
 
 
-def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None, tiktok=True):
+def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None, tiktok=True, limit=None):
     """Ordered fallback strategies — first success wins.
 
     `preferred` is the path that worked during the metadata lookup. Trying it
     first for the download avoids burning time on paths TikTok just blocked.
     Non-TikTok extractors ignore the TikTok app arguments, so repeating six
     variants for them was pure latency — one attempt is enough.
+
+    `limit` caps the race when the winner is already known. Racing all six
+    routes for a file whose CDN mirror just failed saturates the connection and
+    makes even a working route finish late — after the four-second ad.
     """
     if not tiktok:
         return [ydl_options(outtmpl, "web", mode, fast=fast)]
@@ -394,12 +437,10 @@ def ydl_variants(outtmpl=None, mode="video", fast=False, preferred=None, tiktok=
     if preferred in order:
         order.remove(preferred)
         order.insert(0, preferred)
-    # Metadata only needs the three fastest paths. Downloads race every path:
-    # TikTok blocks them at random, so dropping the last two could discard the
-    # one route that actually works. Since they run in parallel, extra paths
-    # add resilience without making the visitor wait longer.
     if fast:
-        order = order[:3]
+        limit = 3 if limit is None else min(limit, 3)
+    if limit:
+        order = order[:limit]
     return [ydl_options(outtmpl, name, mode, fast=fast) for name in order]
 
 
@@ -472,7 +513,7 @@ def resolve_tiktok_info(url):
     return wave(("tikwm",) + STRATEGIES, 6)
 
 
-def race_ydl_download(url, workdir, variants, video_format, mode):
+def race_ydl_download(url, workdir, variants, video_format, mode, timeout=100, retry=True):
     """Download with several TikTok strategies at once; first file wins.
 
     TikTok blocks most app hosts at random. Trying them one by one meant four
@@ -520,7 +561,7 @@ def race_ydl_download(url, workdir, variants, video_format, mode):
         result = None
         last_error = None
         try:
-            for future in as_completed(futures, timeout=100):
+            for future in as_completed(futures, timeout=timeout):
                 value = future.result()
                 if isinstance(value, tuple):
                     result = value
@@ -539,7 +580,7 @@ def race_ydl_download(url, workdir, variants, video_format, mode):
         return result, last_error
 
     result, last_error = run()
-    if result:
+    if result or not retry:
         return result, last_error
     # A whole first wave can be 403'd during a short TikTok block. One quiet
     # retry succeeds often enough to be worth it, and costs nothing on the
@@ -575,6 +616,10 @@ def locate_download(workdir, ydl, meta, mode="video"):
 
 def error_response(message, status=400):
     return jsonify({"error": message}), status
+
+
+class StalePreparation(Exception):
+    """A better-hinted prepare job replaced this one before it finished."""
 
 
 def error_category(exc):
@@ -721,13 +766,10 @@ def video_info():
 
 
 def make_file_response(path, meta):
-    """Share the response headers between a fresh download and a cache hit."""
+    """Stream a prepared file from disk — never buffer a 100 MB file in RAM."""
     size = os.path.getsize(path)
     if size > MAX_BYTES:
-        return error_response("The file is over 300 MB — it cannot be saved.")
-
-    with open(path, "rb") as handle:
-        payload = io.BytesIO(handle.read())
+        return error_response("The file is over 250 MB — it cannot be saved.")
 
     extension = safe_extension(path)
     preferred = download_filename(meta, extension)
@@ -751,54 +793,111 @@ def make_file_response(path, meta):
         mimetype = "image/jpeg"
     else:
         mimetype = "video/mp4"
-    response = send_file(payload, mimetype=mimetype)
+    response = send_file(path, mimetype=mimetype, conditional=True)
     response.headers["Content-Disposition"] = disposition
     return response
 
 
-@app.post("/api/video/download")
-def video_download():
-    data = json_body()
-    if data is None:
-        return error_response("Invalid request.")
+# A preparation job is shared by every request for the same file. The browser
+# starts one when a link is pasted and again when a format is tapped; both reuse
+# the same background work, and ad close only has to stream the cached result.
+DOWNLOAD_JOBS = {}
+DOWNLOAD_JOB_LOCK = threading.Lock()
+PREPARE_WAIT_SECONDS = 120
+
+
+def parse_download_request(data):
+    """Validate one download request. Returns (params, None) or (None, response)."""
+    if not isinstance(data, dict):
+        return None, error_response("Invalid request.")
     try:
         url = validate_link(data.get("url", ""))
     except ValueError as exc:
-        return error_response(str(exc))
+        return None, error_response(str(exc))
 
     mode = parse_mode(data.get("mode"))
     tiktok = is_tiktok_link(url)
     if mode == "mp3" and not FFMPEG_DIR:
-        return error_response("FFmpeg is not available for MP3 conversion. Configure the server and try again.")
+        return None, error_response(
+            "FFmpeg is not available for MP3 conversion. Configure the server and try again."
+        )
 
+    # A plain browser download GET cannot carry the resolved CDN hint in its
+    # query string. Reuse the metadata lookup already cached for this link so
+    # the download never has to resolve the same video a second time.
+    info_entry = INFO_CACHE.get(url + "#story" if mode == "story" else url)
+    info_payload = {}
+    if info_entry and time.time() - info_entry[0] < INFO_CACHE_TTL:
+        candidate = info_entry[1]
+        if isinstance(candidate, dict):
+            info_payload = candidate
+
+    quality = str(data.get("quality") or DEFAULT_QUALITY)
+    if re.fullmatch(r"[0-9]{1,4}", quality):
+        height = int(quality)
+        if height < 144 or height > 4320:
+            return None, error_response("Invalid video quality.")
+    elif quality in VIDEO_FORMATS:  # backwards compatibility
+        height = int(quality)
+    else:
+        return None, error_response("Invalid video quality.")
+
+    story_id = data.get("storyId")
+    if story_id not in (None, ""):
+        try:
+            story_id = validate_story_id(story_id)
+        except ValueError as exc:
+            return None, error_response(str(exc))
+
+    media = data.get("media") if isinstance(data.get("media"), dict) else None
+    if not media and isinstance(info_payload.get("media"), dict):
+        media = info_payload["media"]
+    variant = data.get("variant") or info_payload.get("variant")
+
+    # An exact-height stream was offered. Without this, `best[height<=1280]`
+    # happily saves the larger-bitrate 1024p file when the visitor chose 1280p.
+    offered_heights = {
+        str(item.get("height"))
+        for item in (info_payload.get("formats") or [])
+        if isinstance(item, dict) and item.get("height")
+    }
+    if isinstance(media, dict):
+        offered_heights.update((media.get("by_height") or {}).keys())
+    exact = str(height) in offered_heights
+    video_format = video_selector(height, tiktok, exact=exact)
+
+    params = {
+        "url": url,
+        "mode": mode,
+        "tiktok": tiktok,
+        "height": height,
+        "quality": quality,
+        "video_format": video_format,
+        "exact": exact,
+        "story_id": story_id,
+        "variant": variant,
+        "media": media,
+        "cache_key": file_cache_key(url, mode, quality, story_id),
+    }
+    return params, None
+
+
+def build_prepared_file(params, stale=None):
+    """Resolve and save the file into the shared cache. Raises on failure."""
+    if stale and stale():
+        raise StalePreparation()
+    key = params["cache_key"]
     workdir = tempfile.mkdtemp(prefix="tiktok-video-downloader-video-")
     try:
-        quality = str(data.get("quality") or DEFAULT_QUALITY)
-        if re.fullmatch(r"[0-9]{1,4}", quality):
-            height = int(quality)
-            if height < 144 or height > 4320:
-                return error_response("Invalid video quality.")
-            video_format = video_selector(height, tiktok)
-        elif quality in VIDEO_FORMATS:  # backwards compatibility
-            video_format = video_selector(int(quality), tiktok)
-        else:
-            return error_response("Invalid video quality.")
+        url = params["url"]
+        mode = params["mode"]
+        tiktok = params["tiktok"]
+        height = params["height"]
+        video_format = params["video_format"]
+        story_id = params["story_id"]
+        hint = params["media"] or {}
+        variant = params["variant"]
 
-        story_id = data.get("storyId")
-        if story_id not in (None, ""):
-            try:
-                story_id = validate_story_id(story_id)
-            except ValueError as exc:
-                return error_response(str(exc))
-
-        cache_key = file_cache_key(url, mode, quality, story_id)
-        cached = cached_file(cache_key)
-        if cached:
-            # Already prepared — return it now instead of making the ad wait on
-            # another TikTok extraction and CDN transfer.
-            return make_file_response(*cached)
-
-        last_error = None
         if mode == "story":
             media = story_media(story_id, url)
             if cffi_requests is None:
@@ -815,21 +914,26 @@ def video_download():
                 handle.write(content)
             meta = {"title": f"tiktok-story-{story_id}", "id": story_id}
         else:
-            def ydl_attempt():
+            def ydl_attempt(target_dir, fast=False, limit=None, retry=True):
                 variants = ydl_variants(
-                    os.path.join(workdir, "%(id)s.%(ext)s"),
+                    os.path.join(target_dir, "%(id)s.%(ext)s"),
                     mode,
-                    preferred=data.get("variant"),
+                    preferred=variant,
                     tiktok=tiktok,
+                    limit=limit,
                 )
-                # TikTok blocks hosts at random. Racing every route lets one
-                # working path finish immediately instead of queueing 403s.
-                return race_ydl_download(url, workdir, variants, video_format, mode)
+                # TikTok blocks hosts at random. Race a shortlist when /info
+                # already told us which route works; otherwise keep the full
+                # wave so one blocked host cannot hold up the whole download.
+                return race_ydl_download(
+                    url, target_dir, variants, video_format, mode,
+                    timeout=12 if fast else 100,
+                    retry=retry and not fast,
+                )
 
-            def mirror_attempt():
+            def mirror_attempt(target_dir):
                 if not tiktok or cffi_requests is None:
                     return None, None, None
-                hint = data.get("media") if isinstance(data.get("media"), dict) else {}
                 mirror_key = "audio_alternates" if mode == "mp3" else "video_alternates"
                 candidates = [hint.get("audio" if mode == "mp3" else "video")]
                 if mode != "mp3":
@@ -846,7 +950,7 @@ def video_download():
                     if checked not in mirrors:
                         mirrors.append(checked)
                 source = hint
-                if not mirrors and data.get("variant") not in STRATEGIES:
+                if not mirrors and variant not in STRATEGIES:
                     # /info already found a yt-dlp route, so TikWM is known to
                     # be down — asking it again would only add dead time.
                     resolved = tikwm_data(url)
@@ -855,10 +959,12 @@ def video_download():
                         source = resolved
                 if not mirrors:
                     return None, None, None
+                if stale and stale():
+                    return None, None, StalePreparation()
                 try:
                     content, _content_type = fetch_media_raced(mirrors)
                     extension = ".mp3" if mode == "mp3" else ".mp4"
-                    candidate = os.path.join(workdir, "media" + extension)
+                    candidate = os.path.join(target_dir, "media" + extension)
                     with open(candidate, "wb") as handle:
                         handle.write(content)
                     meta = {
@@ -869,14 +975,50 @@ def video_download():
                     }
                     return candidate, meta, None
                 except Exception as exc:
-                    app.logger.error("media download failed [%s]: %s", type(exc).__name__, str(exc)[:300])
+                    app.logger.error(
+                        "media download failed [%s]: %s", type(exc).__name__, str(exc)[:300]
+                    )
                     return None, None, exc
 
-            if mode == "video":
-                # A CDN copy is often HEVC and needs a slow full re-encode. The
-                # yt-dlp race picks TikTok's muxed H.264 stream instead, which is
-                # both quicker and already in sync. Mirrors stay as fallback.
-                result, failure = ydl_attempt()
+            has_mirror = any(
+                isinstance(hint.get(key), str) and hint[key]
+                for key in ("video", "audio")
+            ) or any(
+                isinstance(hint.get(key), list) and hint[key]
+                for key in ("video_alternates", "audio_alternates", "by_height")
+            )
+
+            if mode == "video" and has_mirror:
+                # /info already resolved the real CDN URLs. Use them directly.
+                # Racing six yt-dlp routes here as well hammered TikTok from the
+                # same IP and caused 403s plus TikWM rate limits; the plain CDN
+                # copy is both faster and far more reliable. yt-dlp stays as a
+                # quiet fallback only when every mirror is genuinely dead.
+                mirror_dir = os.path.join(workdir, "mirror")
+                os.makedirs(mirror_dir, exist_ok=True)
+                path, meta, mirror_failure = mirror_attempt(mirror_dir)
+                if not path:
+                    ydl_dir = os.path.join(workdir, "ydl")
+                    os.makedirs(ydl_dir, exist_ok=True)
+                    # The CDN mirror failed, but /info still knows the route that
+                    # resolved this video. Use only that route plus two fallbacks;
+                    # a six-way retry storm here is what made the file appear
+                    # many seconds after the ad closed.
+                    result, failure = ydl_attempt(
+                        ydl_dir,
+                        limit=3 if variant in STRATEGIES else None,
+                        retry=False,
+                    )
+                    if result:
+                        path, meta = result
+                    else:
+                        raise (failure or mirror_failure or RuntimeError("Download failed."))
+                if stale and stale():
+                    raise StalePreparation()
+            elif mode == "video":
+                # No CDN hint yet. yt-dlp must resolve the link itself; mirrors
+                # stay as a fallback if every app route is blocked.
+                result, failure = ydl_attempt(workdir)
                 if result:
                     path, meta = result
                 else:
@@ -884,38 +1026,152 @@ def video_download():
                         "yt-dlp race failed [%s]: %s",
                         type(failure).__name__, str(failure)[:300],
                     )
-                    last_error = failure
-                    path, meta, failure = mirror_attempt()
+                    path, meta, mirror_failure = mirror_attempt(workdir)
                     if not path:
-                        last_error = failure or last_error
-                        return error_response(
-                            with_hint("Download failed.", error_category(last_error))
-                        )
+                        raise (mirror_failure or failure or RuntimeError("Download failed."))
             else:
-                path, meta, failure = mirror_attempt()
+                path, meta, mirror_failure = mirror_attempt(workdir)
                 if not path:
-                    result, last_error = ydl_attempt()
+                    result, failure = ydl_attempt(workdir)
                     if not result:
-                        last_error = last_error or failure
-                        return error_response(
-                            with_hint("Download failed.", error_category(last_error))
-                        )
+                        raise (failure or mirror_failure or RuntimeError("Download failed."))
                     path, meta = result
 
+        if stale and stale():
+            raise StalePreparation()
         if mode != "story":
             path = (
                 ensure_real_mp3(path, workdir) if mode == "mp3"
                 else ensure_compatible_video(path, workdir)
             )
-        store_file(cache_key, path, meta, os.path.getsize(path))
-        return make_file_response(path, meta)
+        if stale and stale():
+            raise StalePreparation()
+        store_file(key, path, meta, os.path.getsize(path))
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    hit = cached_file(key)
+    if not hit:
+        raise RuntimeError("The prepared file is no longer available.")
+    return hit
+
+
+def _forget_job(key, job):
+    with DOWNLOAD_JOB_LOCK:
+        if DOWNLOAD_JOBS.get(key) is job:
+            DOWNLOAD_JOBS.pop(key, None)
+
+
+def _prepare_score(params):
+    """Prefer jobs that already know the real CDN mirrors and exact quality."""
+    media = params.get("media") or {}
+    score = 0
+    if any(isinstance(media.get(key), str) and media[key] for key in ("video", "audio")):
+        score += 2
+    if any(isinstance(media.get(key), (list, dict)) and media[key] for key in (
+        "video_alternates", "audio_alternates", "by_height",
+    )):
+        score += 1
+    if params.get("variant"):
+        score += 1
+    if params.get("exact"):
+        score += 1
+    return score
+
+
+def start_prepare(params):
+    """Start, reuse, or upgrade background preparation.
+
+    The first paste can arrive before /info has resolved. That job must not
+    monopolise the file for two minutes while a better-hinted request waits.
+    A later request with CDN mirrors replaces it; the old worker is marked
+    stale and never writes its result into the cache.
+    """
+    key = params["cache_key"]
+    score = _prepare_score(params)
+    with DOWNLOAD_JOB_LOCK:
+        if cached_file(key):
+            return True
+        job = DOWNLOAD_JOBS.get(key)
+        if job and not job["event"].is_set():
+            if score <= job["score"]:
+                return False
+            job["stale"] = True
+        job = {
+            "event": threading.Event(),
+            "error": None,
+            "stale": False,
+            "score": score,
+        }
+        DOWNLOAD_JOBS[key] = job
+
+    def work():
+        try:
+            build_prepared_file(params, stale=lambda: job["stale"])
+        except StalePreparation:
+            pass
+        except Exception as exc:
+            if not job["stale"]:
+                job["error"] = exc
+                app.logger.error(
+                    "background prepare failed [%s]: %s", type(exc).__name__, str(exc)[:300]
+                )
+        finally:
+            job["event"].set()
+            # Keep the failure briefly so a download GET can show a safe error.
+            timer = threading.Timer(30, _forget_job, args=(key, job))
+            timer.daemon = True
+            timer.start()
+
+    threading.Thread(target=work, daemon=True).start()
+    return False
+
+
+def wait_for_prepare(key):
+    with DOWNLOAD_JOB_LOCK:
+        job = DOWNLOAD_JOBS.get(key)
+    if not job:
+        return None
+    job["event"].wait(PREPARE_WAIT_SECONDS)
+    return job["error"]
+
+
+@app.post("/api/video/prepare")
+def video_prepare():
+    params, error = parse_download_request(json_body() or {})
+    if error:
+        return error
+    key = params["cache_key"]
+    if cached_file(key):
+        return jsonify({"ready": True, "token": key})
+    return jsonify({"ready": not start_prepare(params), "token": key})
+
+
+@app.get("/api/video/download")
+@app.post("/api/video/download")
+def video_download():
+    # GET lets ad close trigger a plain browser download: the browser streams the
+    # file straight to disk with zero JavaScript waiting and no in-memory Blob.
+    data = dict(request.args) if request.method == "GET" else (json_body() or {})
+    params, error = parse_download_request(data)
+    if error:
+        return error
+    key = params["cache_key"]
+    hit = cached_file(key)
+    if not hit:
+        failure = wait_for_prepare(key)
+        if failure:
+            return error_response(with_hint("Download failed.", error_category(failure)))
+        hit = cached_file(key)
+    if hit:
+        return make_file_response(*hit)
+    try:
+        return make_file_response(*build_prepared_file(params))
     except StoryError as exc:
         return error_response(str(exc))
     except Exception as exc:
         app.logger.error("video download failed [%s]: %s", type(exc).__name__, str(exc)[:500])
         return error_response(with_hint("Download failed.", error_category(exc)))
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
 
 
 @app.route("/", defaults={"path": ""})
