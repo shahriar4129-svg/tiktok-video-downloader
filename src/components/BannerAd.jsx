@@ -15,24 +15,42 @@ function loadAdsense(client) {
 
 /**
  * Renders one ad slot. Everything is configured in src/config/ads.js.
- * Supports AdSense auto ads, manual responsive AdSense units, a pasted HTML
- * snippet, or a simple image banner.
+ *
+ * Banner behaviour:
+ *  - Manual AdSense unit when the slot has its own ID (or the shared
+ *    fallbackSlot is set) — this is what makes every position visible.
+ *  - Auto-ad anchor when AdSense auto ads are on but no slot ID is available.
+ *  - Custom HTML snippet or a simple image banner when AdSense is off.
+ *
+ * A reserved minHeight keeps the layout stable while the network fills the ad.
  */
-export default function BannerAd({ slot, className = '' }) {
+export default function BannerAd({ slot, className = '', minHeight = 96 }) {
   const html = typeof ADS.html?.[slot] === 'string' ? ADS.html[slot].trim() : ''
   const image = ADS.slots?.[slot]
   const adsense = ADS.adsense
-  const adsenseSlot =
-    typeof adsense?.slots?.[slot] === 'string' ? adsense.slots[slot].trim() : ''
+  const client = adsense?.client || ''
 
-  const adsenseOn = Boolean(ADS.enabled && adsense?.enabled && adsense?.client)
+  const adsenseOn = Boolean(ADS.enabled && adsense?.enabled && client)
   const autoAds = Boolean(adsenseOn && adsense?.auto)
+
+  const configuredSlot =
+    typeof adsense?.slots?.[slot] === 'string' ? adsense.slots[slot].trim() : ''
+  const fallbackSlot =
+    typeof adsense?.fallbackSlot === 'string' ? adsense.fallbackSlot.trim() : ''
+  // A shared slot ID lets every position run as a real responsive ad unit when
+  // the owner only has one ID (the reference site behaves the same way).
+  const adsenseSlot = configuredSlot || fallbackSlot
+
   const useAdsense = Boolean(adsenseOn && adsenseSlot)
   const useHtml = Boolean(ADS.enabled && !adsenseOn && html)
   const useImage = Boolean(
     ADS.enabled && !adsenseOn && !useHtml && image?.enabled && image?.image,
   )
-  const active = autoAds || useAdsense || useHtml || useImage
+  const useAutoAnchor = Boolean(autoAds && !useAdsense && !useHtml && !useImage)
+  const active = Boolean(
+    adsenseOn ? useAdsense || useAutoAnchor : useHtml || useImage,
+  )
+
   const contentRef = useRef(null)
   const pushedRef = useRef(false)
 
@@ -40,10 +58,10 @@ export default function BannerAd({ slot, className = '' }) {
     if (!active) return
 
     if (adsenseOn) {
-      loadAdsense(adsense.client)
-      // Manual units need one explicit push. React StrictMode runs effects
-      // twice in dev — guard so Google never sees a duplicate push.
-      if (useAdsense && !pushedRef.current) {
+      loadAdsense(client)
+      // One push per mounted slot. React StrictMode runs effects twice in dev,
+      // so the ref guard prevents Google seeing a duplicate request.
+      if ((useAdsense || useAutoAnchor) && !pushedRef.current && contentRef.current) {
         pushedRef.current = true
         try {
           ;(window.adsbygoogle = window.adsbygoogle || []).push({})
@@ -65,10 +83,9 @@ export default function BannerAd({ slot, className = '' }) {
       fresh.textContent = old.textContent
       old.replaceWith(fresh)
     })
-  }, [active, adsenseOn, useAdsense, useHtml, html, adsense?.client])
+  }, [active, adsenseOn, useAdsense, useAutoAnchor, useHtml, html, client, adsenseSlot])
 
-  // Auto ads are injected by Google anywhere on the page — no wrapper needed.
-  if (!active || (autoAds && !useAdsense && !useHtml && !useImage)) return null
+  if (!active) return null
 
   return (
     <aside
@@ -78,14 +95,24 @@ export default function BannerAd({ slot, className = '' }) {
     >
       <div
         ref={contentRef}
-        className="my-4 flex min-h-[40px] items-center justify-center overflow-hidden rounded-xl"
+        style={{ minHeight }}
+        className="my-4 flex w-full items-center justify-center overflow-hidden rounded-xl"
       >
         {useAdsense ? (
           <ins
             className="adsbygoogle block w-full"
             style={{ display: 'block' }}
-            data-ad-client={adsense.client}
+            data-ad-client={client}
             data-ad-slot={adsenseSlot}
+            data-ad-format="auto"
+            data-full-width-responsive="true"
+          />
+        ) : useAutoAnchor ? (
+          // Auto-ads mode: an unslotted anchor gives Google a clean mount point.
+          <ins
+            className="adsbygoogle block w-full"
+            style={{ display: 'block' }}
+            data-ad-client={client}
             data-ad-format="auto"
             data-full-width-responsive="true"
           />

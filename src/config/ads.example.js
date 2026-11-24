@@ -20,6 +20,9 @@ function decodeAdValue(encoded) {
   }
 }
 
+const ADS_CLIENT = decodeAdValue('Y2EtcHViLVhYWFhYWFhYWFhYWFhYWFg=')
+const ADS_SLOT = decodeAdValue('WU9VUl9BRF9TTE9UX0lE')
+
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value)
@@ -59,12 +62,15 @@ export const ADS = {
   // Google AdSense — the only active ad network.
   adsense: {
     enabled: true,
-    client: decodeAdValue('Y2EtcHViLVhYWFhYWFhYWFhYWFhYWFg='),
+    client: ADS_CLIENT,
     auto: true,
+    // Shared responsive slot used by every banner position that has no own ID.
+    // This keeps all ssstik-style placements live with a single publisher ID.
+    fallbackSlot: ADS_SLOT,
     slots: {
       header: '',
       afterHero: '',
-      afterResult: decodeAdValue('WU9VUl9BRF9TTE9UX0lE'),
+      afterResult: ADS_SLOT,
       afterFeatures: '',
       afterPlatforms: '',
       afterHowTo: '',

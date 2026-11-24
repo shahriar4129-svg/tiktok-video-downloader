@@ -1020,6 +1020,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </div>
       </section>
 
+      <BannerAd slot="afterHowTo" />
+
       {/* ---------- Detailed guide ---------- */}
       <section className="card-surface p-5 sm:p-6">
         <Heading icon={Video} title="More ways to save" subtitle="Everything you can do with a single link" />
