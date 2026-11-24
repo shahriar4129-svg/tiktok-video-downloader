@@ -22,9 +22,9 @@ function loadAdsense(client) {
  *  - Auto-ad anchor when AdSense auto ads are on but no slot ID is available.
  *  - Custom HTML snippet or a simple image banner when AdSense is off.
  *
- * A reserved minHeight keeps the layout stable while the network fills the ad.
+ * Unfilled slots are hidden, so no blank reserved box is left in the page.
  */
-export default function BannerAd({ slot, className = '', minHeight = 96 }) {
+export default function BannerAd({ slot, className = '' }) {
   const html = typeof ADS.html?.[slot] === 'string' ? ADS.html[slot].trim() : ''
   const image = ADS.slots?.[slot]
   const adsense = ADS.adsense
@@ -115,7 +115,8 @@ export default function BannerAd({ slot, className = '', minHeight = 96 }) {
     })
   }, [active, adsenseOn, useAdsense, useAutoAnchor, useHtml, html, client, adsenseSlot])
 
-  if (!active) return null
+  // No blank box for unfilled slots — hide the whole aside until an ad lands.
+  if (!active || (unfilled && !useFallback)) return null
 
   return (
     <aside
@@ -125,7 +126,6 @@ export default function BannerAd({ slot, className = '', minHeight = 96 }) {
     >
       <div
         ref={contentRef}
-        style={{ minHeight }}
         className="my-4 flex w-full items-center justify-center overflow-hidden rounded-xl"
       >
         {useAdsense ? (
