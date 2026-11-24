@@ -42,7 +42,7 @@ export default function App() {
               <Video className="h-5 w-5 text-white" strokeWidth={2.2} aria-hidden="true" />
             </span>
             <div>
-              <h1 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">TikTok Video Downloader</h1>
+              <h1 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">TikTok Video Downloader HD</h1>
               <p className="text-[10px] font-medium text-slate-600 sm:text-[11px]">Download TikTok videos in HD.</p>
             </div>
           </button>
@@ -94,7 +94,7 @@ export default function App() {
       <BannerAd slot="beforeFooter" />
 
       <footer className="bg-[#0f3b38] py-8 text-center text-xs text-white/80">
-        <p className="font-semibold">© 2026 TikTok Video Downloader. All rights reserved.</p>
+        <p className="font-semibold">© 2026 TikTok Video Downloader HD. All rights reserved.</p>
         <nav aria-label="Footer" className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-semibold text-white/70">
           <a href="/guides/" className="transition hover:text-white">Download guides</a>
           <a href="/sitemap.xml" className="transition hover:text-white">Sitemap</a>

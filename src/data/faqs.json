@@ -1,0 +1,149 @@
+{
+  "sections": [
+    {
+      "title": "General FAQs",
+      "items": [
+        {
+          "q": "What is TikTok Video Downloader HD?",
+          "a": "TikTok Video Downloader HD is a free browser tool for saving public TikTok videos as clean MP4, 192 kbps MP3 audio, or active stories. No login, app, or extension is needed."
+        },
+        {
+          "q": "How to download TikTok videos online?",
+          "a": "Open TikTok, tap Share and Copy link, paste the link into TikTok Video Downloader HD, click Download, pick a format, then close the short ad to save the file."
+        },
+        {
+          "q": "Is TikTok Video Downloader HD free to use?",
+          "a": "Yes. TikTok Video Downloader HD is free to use. Ads keep it running; there is no signup, quota, or hidden fee."
+        },
+        {
+          "q": "Does this TikTok downloader require installation?",
+          "a": "No. It runs in modern browsers on desktop and mobile. Just open the site, paste a link, and download."
+        },
+        {
+          "q": "Is TikTok Video Downloader HD safe to use?",
+          "a": "Yes, when used normally: you do not log in, install software, or upload files. Only paste public TikTok links you trust, and save only content you own or have permission to use. TikTok Video Downloader HD is not affiliated with TikTok or ByteDance."
+        },
+        {
+          "q": "Can I download TikTok videos without an account?",
+          "a": "Yes. No TikTok account is needed. Private, deleted, age-restricted, or login-only videos cannot be read."
+        },
+        {
+          "q": "Does the downloader work on all devices?",
+          "a": "It works in Chrome, Safari, Firefox, and Edge on Windows, macOS, Linux, Android, and iOS. A modern browser with JavaScript and permission to download files is enough."
+        }
+      ]
+    },
+    {
+      "title": "Download & Video Quality",
+      "items": [
+        {
+          "q": "How to download TikTok videos without a watermark?",
+          "a": "Paste a public TikTok link in TikTok Video Downloader HD, choose an MP4 quality, and close the ad. The saved file uses TikTok's clean media stream, so the logo and username overlay are not burned in."
+        },
+        {
+          "q": "Can I download TikTok videos in HD quality?",
+          "a": "Yes. The tool shows the exact resolutions the source video offers. Choose the highest available MP4 option for the best quality; lower resolutions make smaller files."
+        },
+        {
+          "q": "Can I download TikTok videos in MP4 format?",
+          "a": "Yes. MP4 is the main format. Pick any offered resolution and the file saves with its best available audio."
+        },
+        {
+          "q": "How do I save TikTok videos to my phone gallery?",
+          "a": "TikTok Video Downloader HD saves to the browser's default Downloads folder. On Android, open Downloads in your file manager; on iPhone, open Files then Downloads. Move the file to your gallery or Photos app manually if your device supports it."
+        },
+        {
+          "q": "Can I download TikTok videos on my PC?",
+          "a": "Yes. Open the site in a desktop browser, paste the TikTok link, choose MP4 or MP3, and the file saves to your computer's Downloads folder."
+        },
+        {
+          "q": "Can I download TikTok videos on iPhone?",
+          "a": "Yes. In Safari, paste the link, choose a format, and close the ad. The MP4 saves to Files then Downloads."
+        },
+        {
+          "q": "Can I download TikTok videos on Android?",
+          "a": "Yes. In Chrome or another Android browser, paste the link, choose a format, and the file saves to your Downloads folder."
+        }
+      ]
+    },
+    {
+      "title": "Audio & Compatibility",
+      "items": [
+        {
+          "q": "Can I convert TikTok videos to MP3?",
+          "a": "Yes. Choose MP3 under Format, paste a TikTok video link, click Download, then select Download MP3. TikTok Video Downloader HD extracts the audio at 192 kbps."
+        },
+        {
+          "q": "Does TikTok Video Downloader HD support all TikTok links?",
+          "a": "It supports public, still-active TikTok video links, direct .mp4 / .webm / .ogg media links, and active story links or story media. Private, deleted, age-restricted, login-only, or expired story links are not supported."
+        },
+        {
+          "q": "Why is my TikTok video not downloading?",
+          "a": "Check that the link is a full TikTok URL, the video is public, and your browser allows downloads. If the site is busy or the source blocks the request, try again, use a direct media link, or choose a lower resolution."
+        },
+        {
+          "q": "Why is the downloaded video quality low?",
+          "a": "The saved quality cannot exceed the original upload. Pick the highest resolution shown; if none appears, the source may only offer a low-resolution stream. Network or device playback settings can also make a good file look soft."
+        },
+        {
+          "q": "Can I download TikTok videos using Chrome?",
+          "a": "Yes. Chrome on Windows, macOS, Android, and ChromeOS works. Allow downloads for the site if Chrome blocks the file."
+        },
+        {
+          "q": "Does the downloader work on mobile browsers?",
+          "a": "Yes. Mobile browsers such as Safari, Chrome, Firefox, and Edge work. Use a normal tab, not private mode, because some browsers block downloads in private mode."
+        }
+      ]
+    },
+    {
+      "title": "Privacy & Copyright",
+      "items": [
+        {
+          "q": "Does TikTok Video Downloader HD store my videos or links?",
+          "a": "No. TikTok Video Downloader HD does not store your links or files after the request ends. Files stream from the source to your browser, and the site does not ask you to upload anything."
+        },
+        {
+          "q": "Is it legal to download TikTok videos?",
+          "a": "Downloading your own content or content you have permission to use is generally fine. Laws and platform terms vary by country, so do not assume every public TikTok video is free to reuse. This is general information, not legal advice."
+        },
+        {
+          "q": "Can I repost downloaded TikTok videos?",
+          "a": "Only with the creator's permission. Check local copyright rules, credit the creator when asked, and follow TikTok's terms before reposting any downloaded video or audio."
+        },
+        {
+          "q": "Do I need permission from the video creator?",
+          "a": "Yes, if you plan to repost, edit commercially, or reuse someone else's video or audio. For personal viewing, still follow local law and TikTok's terms."
+        },
+        {
+          "q": "How can I respect TikTok creators' copyrights?",
+          "a": "Ask before reusing a clip, credit the creator, get permission for commercial or public reuse, and never claim someone else's work as your own. Save only content you own or have clear permission to keep."
+        }
+      ]
+    },
+    {
+      "title": "Troubleshooting",
+      "items": [
+        {
+          "q": "Why is the download button not working?",
+          "a": "If the Download button does nothing, check that the field contains a full TikTok URL and that the browser allows downloads. Reload the page, try another modern browser, or paste a direct media link."
+        },
+        {
+          "q": "What should I do if a TikTok link is invalid?",
+          "a": "A valid link is a complete URL such as https://www.tiktok.com/@user/video/... . Shortened or edited text may fail. Copy link again from TikTok and paste the full URL."
+        },
+        {
+          "q": "Why can't I download a private TikTok video?",
+          "a": "Private videos require the creator's account access. TikTok Video Downloader HD reads only public links and does not use anyone's login or cookies. Ask the creator for access or use a public copy."
+        },
+        {
+          "q": "How can I fix a failed download?",
+          "a": "Try these checks: use a full public link, confirm the file is still available, close the ad fully, allow downloads in the browser, choose a lower resolution, and retry. If a story failed, paste the direct story media link."
+        },
+        {
+          "q": "What should I do if the downloader is not working?",
+          "a": "Check your connection and refresh the page. If the tool still fails, try a different public link, use Chrome or Safari in a normal tab, disable download blockers, or come back later if TikTok is blocking the request."
+        }
+      ]
+    }
+  ]
+}

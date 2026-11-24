@@ -18,50 +18,15 @@ import { classifyUrl, formatBytes } from '../lib/video.js'
 import BannerAd from './BannerAd.jsx'
 import VignetteAd from './VignetteAd.jsx'
 import { ADS } from '../config/ads.js'
+import FAQ_DATA from '../data/faqs.json'
 
 // Bundled locally so the demo works offline and without CORS dependencies.
 const SAMPLE = '/sample-video.mp4'
 // Public TikTok clip — used only as a quick demo chip.
 const TIKTOK_DEMO = 'https://www.tiktok.com/@therock/video/6829267836783971589'
 
-const FAQS = [
-  {
-    q: 'Is this tool free?',
-    a: 'Yes. There is no login, no quota and no extension to install. Paste a link, click Download, then pick a format.',
-  },
-  {
-    q: 'Do I need to install an app?',
-    a: 'No. Safari, Chrome, Firefox, Edge or any modern browser is enough — the file saves straight to your device.',
-  },
-  {
-    q: 'Can I download TikTok videos without a watermark?',
-    a: 'Yes. The original clean video stream is used, so the TikTok logo and username overlay are not burned into the file.',
-  },
-  {
-    q: 'What formats can I save?',
-    a: 'MP4 keeps the video with the best available audio. MP3 extracts only the audio at 192 kbps. Story mode saves an active TikTok story or a direct story media link.',
-  },
-  {
-    q: 'Which video qualities are available?',
-    a: 'Only the resolutions the video actually offers are shown, each with its exact estimated size. Pick a lower resolution for a smaller, faster file.',
-  },
-  {
-    q: 'Can I download private or age-restricted videos?',
-    a: 'No. Only public links can be read. Age-gated or login-only clips need the owner’s cookies and are not supported here.',
-  },
-  {
-    q: 'Where is my file saved?',
-    a: 'Nothing is saved automatically. Pick a format, close the ad, and the file saves to your default Downloads folder. You land right back on the format options. No preview, no page reload.',
-  },
-  {
-    q: 'Why do I see an ad?',
-    a: 'Ads keep this tool free. The file is prepared in the background as soon as you paste the link, so closing the ad starts the save instantly — even for a 100 MB or 20-minute video.',
-  },
-  {
-    q: 'Do you store my links or files?',
-    a: 'No. Downloaded files are streamed directly to your browser. Nothing is kept after the request ends.',
-  },
-]
+// FAQ data is shared with the JSON-LD in index.html; keep questions and answers in sync.
+const FAQ_SECTIONS = FAQ_DATA.sections
 
 // Output modes kept as plain text — the FAQ above the footer explains each one.
 const MODES = [
@@ -577,7 +542,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             className="animate-rise-in text-2xl font-extrabold tracking-tight text-white sm:text-[32px] motion-reduce:animate-none"
             style={{ animationDelay: '60ms' }}
           >
-            TikTok Video Downloader
+            TikTok Video Downloader HD
           </h2>
           <p
             className="animate-rise-in mt-2 text-sm leading-relaxed text-white/80 motion-reduce:animate-none"
@@ -1122,21 +1087,30 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
       {/* ---------- FAQ (directly above the footer area) ---------- */}
       <section id="faq" className="card-surface p-5 sm:p-6">
-        <Heading icon={Info} title="FAQ" subtitle="Common questions, quick answers" />
-        <div className="divide-y divide-slate-100">
-          {FAQS.map((item) => (
-            <details key={item.q} className="group py-3">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-xs font-bold text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
-                {item.q}
-                <span className="text-base leading-none text-slate-600 transition group-open:rotate-45" aria-hidden="true">
-                  +
-                </span>
-              </summary>
-              <p className="mt-2 text-xs leading-relaxed text-slate-600">{item.a}</p>
-            </details>
+        <Heading icon={Info} title="FAQ" subtitle="30 common questions, quick answers" />
+        <div className="space-y-6">
+          {FAQ_SECTIONS.map((section) => (
+            <div key={section.title}>
+              <h3 className="mb-2 text-[11px] font-extrabold uppercase tracking-wider text-teal-700">
+                {section.title}
+              </h3>
+              <div className="divide-y divide-slate-100">
+                {section.items.map((item) => (
+                  <details key={item.q} className="group py-3">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-xs font-bold text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
+                      {item.q}
+                      <span className="text-base leading-none text-slate-600 transition group-open:rotate-45" aria-hidden="true">
+                        +
+                      </span>
+                    </summary>
+                    <p className="mt-2 text-xs leading-relaxed text-slate-600">{item.a}</p>
+                  </details>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
-        <p className="mt-4 border-t border-slate-100 pt-4 text-[10px] leading-relaxed text-slate-600">
+        <p className="mt-6 border-t border-slate-100 pt-4 text-[10px] leading-relaxed text-slate-600">
           Not affiliated with TikTok or ByteDance. Use this tool only for content you own or have
           permission to save.
         </p>

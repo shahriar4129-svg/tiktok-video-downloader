@@ -1,4 +1,4 @@
-# TikTok Video Downloader — full reference
+# TikTok Video Downloader HD — full reference
 
 Canonical URL: https://tiktokvideodownloaderhd.vercel.app/
 Last updated: 2026-11-24
@@ -8,7 +8,7 @@ This file gives AI assistants and search systems a compact, factual description 
 
 ## Product summary
 
-TikTok Video Downloader is a free, browser-based utility for saving public TikTok media. It requires no account, no app installation, and no browser extension. It works on desktop and mobile browsers including Chrome, Safari, Firefox, and Edge.
+TikTok Video Downloader HD is a free, browser-based utility for saving public TikTok media. It requires no account, no app installation, and no browser extension. It works on desktop and mobile browsers including Chrome, Safari, Firefox, and Edge. The homepage FAQ answers 30 questions about downloads, quality, audio, compatibility, privacy, copyright, and troubleshooting.
 
 The tool supports three output modes:
 

@@ -3,7 +3,7 @@
   "entries": [
     {
       "identifier": "urn:air:tiktokvideodownloaderhd.vercel.app:tool:tiktok-video-downloader",
-      "displayName": "TikTok Video Downloader",
+      "displayName": "TikTok Video Downloader HD",
       "type": "application/agent-skills+md",
       "url": "https://tiktokvideodownloaderhd.vercel.app/llms-full.txt",
       "description": "Free browser-based tool that saves public TikTok videos as HD MP4 without watermark, extracts MP3 audio, and downloads active stories.",

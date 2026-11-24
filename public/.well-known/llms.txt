@@ -1,4 +1,4 @@
-# TikTok Video Downloader
+# TikTok Video Downloader HD
 
 > A free TikTok video downloader that runs in the browser. No login, no quota, no extension, no app install.
 
@@ -20,7 +20,7 @@ TikTok links go through a small Python function using yt-dlp and are streamed ba
 
 ## Key pages
 
-- [Home — TikTok Video Downloader](https://tiktokvideodownloaderhd.vercel.app/)
+- [Home — TikTok Video Downloader HD](https://tiktokvideodownloaderhd.vercel.app/)
 - [All downloader guides](https://tiktokvideodownloaderhd.vercel.app/guides/)
 - [How to download TikTok videos without watermark](https://tiktokvideodownloaderhd.vercel.app/guides/how-to-download-tiktok-videos/)
 - [TikTok MP3 downloader](https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-mp3-downloader/)
@@ -32,12 +32,15 @@ TikTok links go through a small Python function using yt-dlp and are streamed ba
 
 ## FAQ
 
-- **Is it free?** Yes — no login, no quota, no extension.
+The homepage has 30 FAQ answers in five sections: General FAQs, Download & Video Quality, Audio & Compatibility, Privacy & Copyright, and Troubleshooting.
+
+- [Read the full FAQ](https://tiktokvideodownloaderhd.vercel.app/#faq)
+- **Is it free?** Yes — no login, no quota, no extension; ads keep the tool running.
 - **Watermark?** The original clean stream is used, so the TikTok overlay is not burned in.
 - **Private or age-restricted clips?** Not supported; only public links can be read.
 - **Formats?** HD MP4, 192 kbps MP3, and active story MP4.
+- **Devices?** Chrome, Safari, Firefox, and Edge on Windows, macOS, Linux, Android, and iOS.
 - **Where does the file go?** To the browser's default Downloads folder.
-- **Ads?** Ads keep the tool free; the file prepares while the ad is open, so closing it starts the save.
 - **Do you store links or files?** No. Files are streamed directly and nothing is kept after the request.
 
 Only download content you own or have permission to save. Not affiliated with TikTok or ByteDance.
