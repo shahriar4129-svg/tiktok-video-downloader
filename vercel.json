@@ -11,6 +11,9 @@
     "api/video/info.py": {
       "maxDuration": 300
     },
+    "api/video/prepare.py": {
+      "maxDuration": 10
+    },
     "api/video/download.py": {
       "maxDuration": 300
     }
