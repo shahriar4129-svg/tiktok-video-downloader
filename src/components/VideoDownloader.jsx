@@ -112,12 +112,12 @@ function MiniBenefit({ children }) {
 function Heading({ icon: Icon, title, subtitle }) {
   return (
     <div className="mb-4 flex items-center gap-3">
-      <span className="grid h-9 w-9 place-items-center rounded-xl bg-teal-500/10 text-teal-600 ring-1 ring-inset ring-teal-400/30">
+      <span className="grid h-9 w-9 place-items-center rounded-xl bg-teal-500/10 text-teal-700 ring-1 ring-inset ring-teal-400/30">
         <Icon className="h-4.5 w-4.5" strokeWidth={2} aria-hidden="true" />
       </span>
       <div>
         <h2 className="text-sm font-bold tracking-tight text-slate-900">{title}</h2>
-        <p className="text-xs text-slate-500">{subtitle}</p>
+        <p className="text-xs text-slate-600">{subtitle}</p>
       </div>
     </div>
   )
@@ -126,11 +126,11 @@ function Heading({ icon: Icon, title, subtitle }) {
 function FeatureCard({ icon: Icon, title, children }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <span className="grid h-9 w-9 place-items-center rounded-xl bg-teal-500/10 text-teal-600 ring-1 ring-inset ring-teal-400/30">
+      <span className="grid h-9 w-9 place-items-center rounded-xl bg-teal-500/10 text-teal-700 ring-1 ring-inset ring-teal-400/30">
         <Icon className="h-4.5 w-4.5" aria-hidden="true" />
       </span>
       <h3 className="mt-3 text-sm font-bold text-slate-900">{title}</h3>
-      <p className="mt-1 text-xs leading-relaxed text-slate-500">{children}</p>
+      <p className="mt-1 text-xs leading-relaxed text-slate-600">{children}</p>
     </div>
   )
 }
@@ -138,11 +138,11 @@ function FeatureCard({ icon: Icon, title, children }) {
 function Step({ number, title, children }) {
   return (
     <div className="rounded-2xl bg-slate-50 p-4">
-      <span className="grid h-7 w-7 place-items-center rounded-lg bg-teal-500/10 text-xs font-black text-teal-600">
+      <span className="grid h-7 w-7 place-items-center rounded-lg bg-teal-500/10 text-xs font-black text-teal-700">
         {number}
       </span>
       <h3 className="mt-3 text-sm font-bold text-slate-900">{title}</h3>
-      <p className="mt-1 text-xs leading-relaxed text-slate-500">{children}</p>
+      <p className="mt-1 text-xs leading-relaxed text-slate-600">{children}</p>
     </div>
   )
 }
@@ -619,7 +619,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             <button
               type="button"
               onClick={url.trim() ? resetAll : handlePaste}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white px-5 py-4 text-sm font-semibold text-[#0d9488] transition hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:w-auto sm:min-w-[6.5rem]"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-white px-5 py-4 text-sm font-semibold text-teal-700 transition hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:w-auto sm:min-w-[6.5rem]"
             >
               {url.trim() ? (
                 <>
@@ -635,7 +635,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             </button>
             <button
               type="submit"
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0d9488] px-6 py-4 text-base font-semibold text-white shadow-lg shadow-teal-900/20 transition hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:w-auto sm:min-w-[9rem]"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-teal-900/20 transition hover:brightness-110 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:w-auto sm:min-w-[9rem]"
             >
               <Download className="h-5 w-5" aria-hidden="true" />
               Download
@@ -669,7 +669,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                   onClick={() => handleModeChange(item.value)}
                   className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${
                     mode === item.value
-                      ? 'bg-white text-[#0d9488]'
+                      ? 'bg-white text-teal-700'
                       : 'bg-white/10 text-white/90 hover:bg-white/20'
                   }`}
                 >
@@ -717,7 +717,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           <button
             type="button"
             onClick={resetAll}
-            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-200 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-200 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
             Clear
@@ -733,7 +733,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               <p className="mt-4 text-sm font-bold text-amber-700">
                 {info.platform} download failed
               </p>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">
+              <p className="mt-2 text-xs leading-relaxed text-slate-600">
                 {serviceReady ? (
                   <>This link could not be processed. The platform may be blocking the request, or the clip may be private or restricted.</>
                 ) : (
@@ -770,11 +770,11 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                   </div>
                 )}
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-                  <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-teal-600">
+                  <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-teal-700">
                     {remoteInfo?.platform || info.platform || 'TikTok'}
                   </span>
                   {remoteInfo?.duration ? (
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">
                       {formatDuration(remoteInfo.duration)}
                     </span>
                   ) : null}
@@ -782,7 +782,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                     No watermark
                   </span>
                   {infoLoading && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">
                       <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                       Details
                     </span>
@@ -791,13 +791,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                 <p className="mt-3 text-sm font-bold text-slate-900">
                   {remoteInfo?.uploader || 'TikTok video'}
                 </p>
-                <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">
+                <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-600">
                   {remoteInfo?.title || 'Your file is being prepared in the background.'}
                 </p>
 
                 {mode === 'video' ? (
                   <div className="mt-5">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-600">
                       Available qualities
                     </p>
                     <div role="group" aria-label="Video quality" className="space-y-2">
@@ -811,7 +811,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                           className={`animate-option-in flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[11px] font-bold transition active:scale-[0.99] motion-reduce:animate-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                             quality === item.value
                               ? 'border-teal-400/50 bg-teal-500/15 text-slate-900 shadow-sm'
-                              : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-teal-400/40 hover:text-slate-900'
+                              : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-teal-400/40 hover:text-slate-900'
                           }`}
                         >
                           <span>{item.label}</span>
@@ -823,17 +823,17 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                         </button>
                       ))}
                     </div>
-                    <p className="mt-2 text-[10px] text-slate-500">
+                    <p className="mt-2 text-[10px] text-slate-600">
                       Only the qualities this video actually offers are shown.
                     </p>
                   </div>
                 ) : mode === 'mp3' ? (
-                  <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] font-semibold text-slate-500">
+                  <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] font-semibold text-slate-600">
                     Audio only · 192 kbps MP3
                   </div>
                 ) : (
                   <div className="mt-5">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-600">
                       Active stories — choose one
                     </p>
                     {(remoteInfo?.stories || []).length ? (
@@ -853,7 +853,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                             {item.thumbnail ? (
                               <img src={item.thumbnail} alt="" className="h-full w-full object-cover" />
                             ) : (
-                              <span className="grid h-full w-full place-items-center bg-slate-100 text-[9px] font-bold text-slate-500">
+                              <span className="grid h-full w-full place-items-center bg-slate-100 text-[9px] font-bold text-slate-600">
                                 {item.type === 'image' ? 'PHOTO' : 'VIDEO'}
                               </span>
                             )}
@@ -861,7 +861,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                         ))}
                       </div>
                     ) : (
-                      <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] text-slate-500">
+                      <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] text-slate-600">
                         {infoLoading ? 'Loading stories…' : 'No active stories on this profile.'}
                       </p>
                     )}
@@ -870,7 +870,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               </div>
 
               <div className="mx-auto w-full max-w-md min-w-0 self-center">
-                <p className="mb-2 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                <p className="mb-2 text-center text-[10px] font-bold uppercase tracking-wider text-slate-600">
                   Download options
                 </p>
                 <div className="space-y-2">
@@ -946,11 +946,11 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
           {state === 'direct' && info && (
             <div className="w-full max-w-sm">
-              <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-teal-500/10 text-teal-600 ring-1 ring-inset ring-teal-400/30">
+              <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-teal-500/10 text-teal-700 ring-1 ring-inset ring-teal-400/30">
                 <Link2 className="h-7 w-7" aria-hidden="true" />
               </span>
               <p className="mt-4 text-sm font-bold text-slate-900">Direct video link found</p>
-              <p className="mt-1 break-all font-mono text-[11px] text-slate-500">
+              <p className="mt-1 break-all font-mono text-[11px] text-slate-600">
                 {info.filename || info.url}
               </p>
               <div className="mt-5 space-y-2">
@@ -980,12 +980,12 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                 <AlertTriangle className="h-7 w-7" aria-hidden="true" />
               </span>
               <p className="mt-4 text-sm font-bold text-rose-600">Couldn’t download that</p>
-              <p className="mt-2 break-words text-xs leading-relaxed text-slate-500">{error}</p>
+              <p className="mt-2 break-words text-xs leading-relaxed text-slate-600">{error}</p>
             </div>
           )}
         </div>
 
-        <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[11px] text-slate-500">
+        <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[11px] text-slate-600">
           <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
           Only download content you own or have permission to save.
         </p>
@@ -1049,7 +1049,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             Tap Share, then choose <strong className="text-slate-800">Copy link</strong>.
           </Step>
           <Step number="3" title="Pick & save">
-            Paste the link above and click <strong className="text-teal-600">Download</strong>. Choose
+            Paste the link above and click <strong className="text-teal-700">Download</strong>. Choose
             a format, then close the ad to start the download.
           </Step>
         </div>
@@ -1059,7 +1059,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       <section className="card-surface p-5 sm:p-6">
         <Heading icon={Video} title="More ways to save" subtitle="Everything you can do with a single link" />
 
-        <div className="space-y-5 text-xs leading-relaxed text-slate-500">
+        <div className="space-y-5 text-xs leading-relaxed text-slate-600">
           <div>
             <h3 className="text-sm font-bold text-slate-900">Download TikTok videos without a watermark</h3>
             <p className="mt-1.5">
@@ -1089,25 +1089,54 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
             </p>
           </div>
         </div>
+
+        <div className="mt-5 rounded-xl border border-teal-100 bg-teal-50/70 p-4">
+          <h3 className="text-sm font-bold text-slate-900">Step-by-step guides</h3>
+          <p className="mt-1 text-xs leading-relaxed text-slate-600">
+            Want more detail? Read the written guides, then come back and paste your link.
+          </p>
+          <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs font-semibold">
+            <li>
+              <a className="text-teal-700 underline decoration-teal-300 underline-offset-2 hover:text-teal-800" href="/guides/how-to-download-tiktok-videos/">
+                How to download TikTok videos
+              </a>
+            </li>
+            <li>
+              <a className="text-teal-700 underline decoration-teal-300 underline-offset-2 hover:text-teal-800" href="/guides/tiktok-mp3-downloader/">
+                TikTok MP3 downloader
+              </a>
+            </li>
+            <li>
+              <a className="text-teal-700 underline decoration-teal-300 underline-offset-2 hover:text-teal-800" href="/guides/tiktok-story-downloader/">
+                TikTok story downloader
+              </a>
+            </li>
+            <li>
+              <a className="text-teal-700 underline decoration-teal-300 underline-offset-2 hover:text-teal-800" href="/guides/tiktok-video-downloader-on-mobile/">
+                Download on Android &amp; iPhone
+              </a>
+            </li>
+          </ul>
+        </div>
       </section>
 
       {/* ---------- FAQ (directly above the footer area) ---------- */}
-      <section className="card-surface p-5 sm:p-6">
+      <section id="faq" className="card-surface p-5 sm:p-6">
         <Heading icon={Info} title="FAQ" subtitle="Common questions, quick answers" />
         <div className="divide-y divide-slate-100">
           {FAQS.map((item) => (
             <details key={item.q} className="group py-3">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg text-xs font-bold text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
                 {item.q}
-                <span className="text-base leading-none text-slate-500 transition group-open:rotate-45" aria-hidden="true">
+                <span className="text-base leading-none text-slate-600 transition group-open:rotate-45" aria-hidden="true">
                   +
                 </span>
               </summary>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">{item.a}</p>
+              <p className="mt-2 text-xs leading-relaxed text-slate-600">{item.a}</p>
             </details>
           ))}
         </div>
-        <p className="mt-4 border-t border-slate-100 pt-4 text-[10px] leading-relaxed text-slate-500">
+        <p className="mt-4 border-t border-slate-100 pt-4 text-[10px] leading-relaxed text-slate-600">
           Not affiliated with TikTok or ByteDance. Use this tool only for content you own or have
           permission to save.
         </p>

@@ -1,0 +1,60 @@
+# TikTok Video Downloader — full reference
+
+Canonical URL: https://tiktokvideodownloaderhd.vercel.app/
+Last updated: 2026-11-24
+Language: English
+
+This file gives AI assistants and search systems a compact, factual description of the tool. For human-readable walkthroughs, use the guide links at the end.
+
+## Product summary
+
+TikTok Video Downloader is a free, browser-based utility for saving public TikTok media. It requires no account, no app installation, and no browser extension. It works on desktop and mobile browsers including Chrome, Safari, Firefox, and Edge.
+
+The tool supports three output modes:
+
+1. MP4 — the clean video stream with the best available audio, at exactly the resolutions the source offers. Estimated file sizes are shown before saving.
+2. MP3 — the audio track extracted and encoded at 192 kbps.
+3. Story — an active TikTok story or a direct story media link, saved as MP4.
+
+Direct `.mp4`, `.webm`, and `.ogg` URLs can also be saved through the browser. A prepared video can be previewed before the final save.
+
+## User workflow
+
+1. The visitor copies a public TikTok link using TikTok's Share → Copy link action.
+2. The link is pasted into the tool on the home page and Download is clicked.
+3. Metadata (thumbnail, title, duration) and available formats appear almost instantly.
+4. The visitor chooses MP4, MP3, or Story and a specific variant.
+5. The file is prepared in a background request while a short ad is displayed.
+6. Closing the ad starts the browser download immediately to the default Downloads folder.
+
+Large files (100 MB+) and long videos (10–20 minutes) use the same background preparation path, so closing the ad does not add extra waiting time.
+
+## Technical behavior
+
+- TikTok links are resolved server-side with yt-dlp through small Vercel Python functions, then streamed back to the browser.
+- Direct video links are fetched client-side into a Blob.
+- Downloaded files are not retained after the request ends.
+- The clean media stream is used, so the TikTok watermark overlay is not burned into MP4 files.
+- Private, deleted, age-restricted, and login-only content is not supported.
+- Stories are normally available for 24 hours; expired stories cannot be recovered from public links.
+- Story mode may be blocked on some networks; a direct story media link is the reliable fallback.
+- The site shows ads to stay free. Ads appear when a format is selected; the file is already being prepared when the ad opens.
+
+## Ownership and permissions
+
+Only public links can be read. Users should save only content they own or have clear permission to reuse. The tool is not affiliated with TikTok or ByteDance.
+
+## Canonical pages
+
+- Home / downloader: https://tiktokvideodownloaderhd.vercel.app/
+- Guide index: https://tiktokvideodownloaderhd.vercel.app/guides/
+- Watermark-free MP4 guide: https://tiktokvideodownloaderhd.vercel.app/guides/how-to-download-tiktok-videos/
+- MP3 guide: https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-mp3-downloader/
+- Story guide: https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-story-downloader/
+- Mobile guide: https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-video-downloader-on-mobile/
+
+## Machine-readable files
+
+- llms.txt: https://tiktokvideodownloaderhd.vercel.app/llms.txt
+- robots.txt: https://tiktokvideodownloaderhd.vercel.app/robots.txt
+- sitemap.xml: https://tiktokvideodownloaderhd.vercel.app/sitemap.xml

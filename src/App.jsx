@@ -36,7 +36,6 @@ export default function App() {
             type="button"
             onClick={goHome}
             title="Back to home"
-            aria-label="TikTok Video Downloader — back to home"
             className="-ml-1 flex items-center gap-2.5 rounded-lg p-1 text-left transition hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             <span className="grid h-9 w-9 place-items-center rounded-lg ss-gradient shadow-sm">
@@ -44,12 +43,13 @@ export default function App() {
             </span>
             <div>
               <h1 className="text-base font-extrabold tracking-tight text-slate-900 sm:text-lg">TikTok Video Downloader</h1>
-              <p className="text-[10px] font-medium text-slate-500 sm:text-[11px]">Download TikTok videos in HD.</p>
+              <p className="text-[10px] font-medium text-slate-600 sm:text-[11px]">Download TikTok videos in HD.</p>
             </div>
           </button>
           <nav className="hidden items-center gap-5 text-[13px] font-semibold text-slate-600 md:flex" aria-label="Main">
             <a href="#tool" className="transition hover:text-teal-600">TikTok Downloader</a>
             <a href="#faq" className="transition hover:text-teal-600">FAQ</a>
+            <a href="/guides/" className="transition hover:text-teal-600">Guides</a>
           </nav>
           <span className="inline-flex items-center gap-1.5 rounded-md bg-teal-50 px-2.5 py-1.5 text-[11px] font-semibold text-teal-700">
             <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
@@ -74,7 +74,7 @@ export default function App() {
               without the fuss
             </h2>
             <p
-              className="animate-rise-in mt-3 text-sm leading-relaxed text-slate-500 sm:text-base motion-reduce:animate-none"
+              className="animate-rise-in mt-3 text-sm leading-relaxed text-slate-600 sm:text-base motion-reduce:animate-none"
               style={{ animationDelay: '110ms' }}
             >
               Paste a link — save as MP4, MP3 or Story. No login needed.
@@ -95,7 +95,12 @@ export default function App() {
 
       <footer className="bg-[#0f3b38] py-8 text-center text-xs text-white/80">
         <p className="font-semibold">© 2026 TikTok Video Downloader. All rights reserved.</p>
-        <p className="mt-2 text-[11px] text-white/50">Not affiliated with TikTok or ByteDance.</p>
+        <nav aria-label="Footer" className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-semibold text-white/70">
+          <a href="/guides/" className="transition hover:text-white">Download guides</a>
+          <a href="/sitemap.xml" className="transition hover:text-white">Sitemap</a>
+          <a href="/llms.txt" className="transition hover:text-white">LLM summary</a>
+        </nav>
+        <p className="mt-2 text-[11px] text-white/70">Not affiliated with TikTok or ByteDance.</p>
       </footer>
 
       {toast && (

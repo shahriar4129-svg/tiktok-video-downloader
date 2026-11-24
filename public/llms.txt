@@ -1,27 +1,43 @@
 # TikTok Video Downloader
 
-> A free TikTok video downloader that runs in the browser. No login, no quota, no extension.
+> A free TikTok video downloader that runs in the browser. No login, no quota, no extension, no app install.
 
-Paste a TikTok link, click Download, then pick a format. The clean file saves straight to your default Downloads folder and you land back on the format options.
+Paste a public TikTok link, click Download, then choose MP4, MP3, or Story. The clean file is prepared in the background while a short ad is shown; closing the ad starts the save to the browser's default Downloads folder.
+
+Canonical URL: https://tiktokvideodownloaderhd.vercel.app/
 
 ## What it can do
 
 - Save TikTok videos without watermark as MP4, at exactly the resolutions the source offers with estimated file sizes.
 - Extract MP3 audio at 192 kbps.
-- Save an active TikTok story or a direct story media link.
+- Save an active TikTok story or a direct story media link as MP4.
 - Download direct `.mp4`, `.webm` and `.ogg` links through the browser.
 - Preview a prepared video in the browser before saving.
 
 ## How it works
 
-TikTok links go through a small Python function using yt-dlp and are streamed back to the browser. Direct video links are fetched into a Blob entirely client-side. Nothing is stored after the request ends.
+TikTok links go through a small Python function using yt-dlp and are streamed back to the browser. Direct video links are fetched client-side into a Blob. Nothing is stored after the request ends. Large files and long videos use the same path, so the ad beat and save speed stay consistent.
+
+## Key pages
+
+- [Home — TikTok Video Downloader](https://tiktokvideodownloaderhd.vercel.app/)
+- [All downloader guides](https://tiktokvideodownloaderhd.vercel.app/guides/)
+- [How to download TikTok videos without watermark](https://tiktokvideodownloaderhd.vercel.app/guides/how-to-download-tiktok-videos/)
+- [TikTok MP3 downloader](https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-mp3-downloader/)
+- [TikTok story downloader](https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-story-downloader/)
+- [TikTok video downloader for Android and iPhone](https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-video-downloader-on-mobile/)
+- [Full LLM reference](https://tiktokvideodownloaderhd.vercel.app/llms-full.txt)
+- [XML sitemap](https://tiktokvideodownloaderhd.vercel.app/sitemap.xml)
+- [Crawling rules](https://tiktokvideodownloaderhd.vercel.app/robots.txt)
 
 ## FAQ
 
 - **Is it free?** Yes — no login, no quota, no extension.
 - **Watermark?** The original clean stream is used, so the TikTok overlay is not burned in.
 - **Private or age-restricted clips?** Not supported; only public links can be read.
-- **Where does the file go?** To your browser's default Downloads folder.
-- **Ads?** Ads keep the tool free; they appear when you pick a format while the file prepares in the background.
+- **Formats?** HD MP4, 192 kbps MP3, and active story MP4.
+- **Where does the file go?** To the browser's default Downloads folder.
+- **Ads?** Ads keep the tool free; the file prepares while the ad is open, so closing it starts the save.
+- **Do you store links or files?** No. Files are streamed directly and nothing is kept after the request.
 
-Only download content you own or have permission to save.
+Only download content you own or have permission to save. Not affiliated with TikTok or ByteDance.
