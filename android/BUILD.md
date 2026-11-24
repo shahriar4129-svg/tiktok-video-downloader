@@ -9,12 +9,13 @@ It does not contain a copy of the downloader logic — the app loads
 Pushes that touch `android/**` run `.github/workflows/build-apk.yml`. The workflow:
 
 1. sets up JDK 17 and the Android SDK,
-2. generates a one-off release keystore,
+2. restores the signing key from the `ANDROID_KEYSTORE_B64` repository secret (or generates one if the secret is missing),
 3. builds the signed release APK,
-4. uploads the APK and keystore as a workflow artifact.
+4. uploads the APK as a workflow artifact.
 
-Download the artifact, keep the keystore somewhere safe, and place the APK in
-`public/downloads/` before deploying the website.
+Download the artifact and place the APK in `public/downloads/` before deploying
+the website. The signing keystore is never uploaded as an artifact; it stays in
+the repository secret so future updates keep the same app identity.
 
 ## Local build
 
@@ -33,4 +34,9 @@ The signed APK is written to:
 `android/app/build/outputs/apk/release/TikTok-Video-Downloader-HD-1.0.0.apk`
 
 Use the same keystore and alias for future updates, otherwise Android will treat the next
-APK as a different app.
+APK as a different app. To let CI reuse a local keystore, base64-encode it and save it as the
+`ANDROID_KEYSTORE_B64` repository secret:
+
+```bash
+gh secret set ANDROID_KEYSTORE_B64 --body "$(base64 -w 0 android/app/release.keystore)"
+```
