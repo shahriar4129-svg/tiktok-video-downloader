@@ -15,7 +15,6 @@ import {
   X,
 } from 'lucide-react'
 import { classifyUrl, formatBytes } from '../lib/video.js'
-import BannerAd from './BannerAd.jsx'
 import VignetteAd from './VignetteAd.jsx'
 import { ADS } from '../config/ads.js'
 import FAQ_DATA from '../data/faqs.json'
@@ -957,7 +956,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       </section>
       )}
 
-      <BannerAd slot="afterResult" />
 
       {/* ---------- Why use it ---------- */}
       <section className="card-surface p-5 sm:p-6">
@@ -984,7 +982,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </div>
       </section>
 
-      <BannerAd slot="afterFeatures" />
 
       {/* ---------- Supported links ---------- */}
       <section className="card-surface p-5 sm:p-6">
@@ -1001,7 +998,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </div>
       </section>
 
-      <BannerAd slot="afterPlatforms" />
 
       {/* ---------- How it works ---------- */}
       <section className="card-surface p-5 sm:p-6">
@@ -1020,7 +1016,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </div>
       </section>
 
-      <BannerAd slot="afterHowTo" />
 
       {/* ---------- Detailed guide ---------- */}
       <section className="card-surface p-5 sm:p-6">

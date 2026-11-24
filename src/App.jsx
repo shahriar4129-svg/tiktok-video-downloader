@@ -2,7 +2,6 @@
 import { Analytics } from '@vercel/analytics/react'
 import { Check, ShieldCheck, Video, X } from 'lucide-react'
 import VideoDownloader from './components/VideoDownloader.jsx'
-import BannerAd from './components/BannerAd.jsx'
 import HeaderPromo from './components/HeaderPromo.jsx'
 
 export default function App() {
@@ -62,8 +61,6 @@ export default function App() {
         </div>
       </header>
 
-      <BannerAd slot="header" />
-
       <main id="tool" className="mx-auto max-w-6xl px-4 pb-16 sm:px-6">
         {!videoHasResult && (
           <div className="mb-6 max-w-2xl">
@@ -86,16 +83,11 @@ export default function App() {
           </div>
         )}
 
-        <BannerAd slot="afterHero" />
-
         <div className="animate-panel-in motion-reduce:animate-none">
           <VideoDownloader key={toolKey} showToast={showToast} onResultStateChange={setVideoHasResult} />
         </div>
 
-        <BannerAd slot="afterTool" />
       </main>
-
-      <BannerAd slot="beforeFooter" />
 
       <footer className="bg-[#0f3b38] py-8 text-center text-xs text-white/80">
         <p className="font-semibold">© 2026 TikTok Video Downloader HD. All rights reserved.</p>
