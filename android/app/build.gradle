@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+def releaseKeystore = file(System.getenv('ANDROID_KEYSTORE') ?: 'release.keystore')
+def releaseAlias = System.getenv('ANDROID_KS_ALIAS') ?: 'tiktokhd'
+def releaseStorePassword = System.getenv('ANDROID_KS_PASSWORD') ?: 'tiktokhd2026'
+def releaseKeyPassword = System.getenv('ANDROID_KS_KEY_PASSWORD') ?: releaseStorePassword
+
+android {
+    namespace 'com.tiktokvideodownloaderhd.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.tiktokvideodownloaderhd.app'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        release {
+            storeFile releaseKeystore
+            storePassword releaseStorePassword
+            keyAlias releaseAlias
+            keyPassword releaseKeyPassword
+            enableV1Signing true
+            enableV2Signing true
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix '.debug'
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    applicationVariants.all { variant ->
+        if (variant.buildType.name == 'release') {
+            variant.outputs.all {
+                outputFileName = "TikTok-Video-Downloader-HD-${variant.versionName}.apk"
+            }
+        }
+    }
+}

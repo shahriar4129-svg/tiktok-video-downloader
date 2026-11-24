@@ -50,6 +50,7 @@ export default function App() {
             <a href="#tool" className="transition hover:text-teal-600">TikTok Downloader</a>
             <a href="#faq" className="transition hover:text-teal-600">FAQ</a>
             <a href="/guides/" className="transition hover:text-teal-600">Guides</a>
+            <a href="/guides/install-app/" className="transition hover:text-teal-600">Install app</a>
           </nav>
           <div className="flex items-center gap-2">
             <HeaderPromo />
@@ -93,6 +94,7 @@ export default function App() {
         <p className="font-semibold">© 2026 TikTok Video Downloader HD. All rights reserved.</p>
         <nav aria-label="Footer" className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-semibold text-white/70">
           <a href="/guides/" className="transition hover:text-white">Download guides</a>
+          <a href="/guides/install-app/" className="transition hover:text-white">Install app</a>
           <a href="/sitemap.xml" className="transition hover:text-white">Sitemap</a>
           <a href="/llms.txt" className="transition hover:text-white">LLM summary</a>
         </nav>

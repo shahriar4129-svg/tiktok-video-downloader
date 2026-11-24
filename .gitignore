@@ -15,6 +15,14 @@ server/cookies.txt
 src/config/ads.js
 *.local
 
+# Android build output and local signing material
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/release.keystore
+android/*.apk
+
 # Local tooling / IDE / OS
 .agents/
 .vercel

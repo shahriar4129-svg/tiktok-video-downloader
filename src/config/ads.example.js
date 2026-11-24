@@ -79,6 +79,16 @@ export const ADS = {
     },
   },
 
+  // Header chip linking to the Android APK / iPhone Home Screen guide.
+  promo: {
+    enabled: true,
+    label: 'Get App',
+    href: '/guides/install-app/',
+    androidHref: '',
+    iosHref: '',
+    alt: 'Open the TikTok Video Downloader HD app install guide',
+  },
+
   // Full-screen interstitial shown after a download option is selected.
   vignette: {
     enabled: true,

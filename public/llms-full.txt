@@ -1,14 +1,14 @@
 # TikTok Video Downloader HD — full reference
 
 Canonical URL: https://tiktokvideodownloaderhd.vercel.app/
-Last updated: 2026-11-24
+Last updated: 2026-11-25
 Language: English
 
 This file gives AI assistants and search systems a compact, factual description of the tool. For human-readable walkthroughs, use the guide links at the end.
 
 ## Product summary
 
-TikTok Video Downloader HD is a free, browser-based utility for saving public TikTok media. It requires no account, no app installation, and no browser extension. It works on desktop and mobile browsers including Chrome, Safari, Firefox, and Edge. The homepage FAQ answers 30 questions about downloads, quality, audio, compatibility, privacy, copyright, and troubleshooting.
+TikTok Video Downloader HD is a free, browser-based utility for saving public TikTok media. It requires no account and no browser extension. An optional Android APK wrapper and an iPhone Home Screen (PWA) option are available for users who want an app-like icon; neither is required to use the tool. It works on desktop and mobile browsers including Chrome, Safari, Firefox, and Edge. The homepage FAQ answers 30 questions about downloads, quality, audio, compatibility, privacy, copyright, and troubleshooting.
 
 The tool supports three output modes:
 
@@ -39,6 +39,7 @@ Large files (100 MB+) and long videos (10–20 minutes) use the same background 
 - Stories are normally available for 24 hours; expired stories cannot be recovered from public links.
 - Story mode may be blocked on some networks; a direct story media link is the reliable fallback.
 - The site shows ads to stay free. Ads appear when a format is selected; the file is already being prepared when the ad opens.
+- A web app manifest and minimal service worker make the site installable on Android and iPhone Home Screens. API responses and APK downloads are never cached; the service worker only caches the static app shell and guide pages for offline reading.
 
 ## Ownership and permissions
 
@@ -52,6 +53,8 @@ Only public links can be read. Users should save only content they own or have c
 - MP3 guide: https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-mp3-downloader/
 - Story guide: https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-story-downloader/
 - Mobile guide: https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-video-downloader-on-mobile/
+- Android APK & iPhone Home Screen install guide: https://tiktokvideodownloaderhd.vercel.app/guides/install-app/
+- Android APK file: https://tiktokvideodownloaderhd.vercel.app/downloads/TikTok-Video-Downloader-HD-1.0.0.apk
 
 ## Machine-readable files
 
