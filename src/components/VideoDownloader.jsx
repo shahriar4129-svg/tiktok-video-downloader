@@ -136,6 +136,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewSrc, setPreviewSrc] = useState('')
   const [previewIsVideo, setPreviewIsVideo] = useState(false)
+  const [previewSources, setPreviewSources] = useState([])
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState('')
   const [lastRequest, setLastRequest] = useState(null)
 
   const prefetchRef = useRef(new Map())
@@ -149,6 +152,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const pendingActionRef = useRef(null)
   const vignetteShownRef = useRef(false)
   const lastRequestRef = useRef(null)
+  const previewVideoRef = useRef(null)
+  const autoPreviewRef = useRef(false)
 
   async function postJson(path, body, signal) {
     const response = await fetch(path, {
@@ -327,7 +332,77 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     pendingActionRef.current = null
   }
 
+  // Preview URLs come from the same /info answer that powers the download, so
+  // the clip starts as soon as Download is tapped — no extra Preview tap.
+  function previewCandidates(body) {
+    const media = body?.media || {}
+    const alternates = [
+      media.video,
+      ...(Array.isArray(media.video_alternates) ? media.video_alternates : []),
+      ...Object.values(media.by_height || {}).flat(),
+    ]
+    return [...new Set(alternates.filter((item) => typeof item === 'string' && /^https?:/i.test(item)))]
+  }
+
+  function closePreview() {
+    autoPreviewRef.current = false
+    setPreviewOpen(false)
+    setPreviewLoading(false)
+    setPreviewError('')
+    const video = previewVideoRef.current
+    if (video) {
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+  }
+
+  function openPreview(body = remoteInfo, directUrl = '') {
+    const candidates = directUrl ? [directUrl] : previewCandidates(body)
+    setPreviewError('')
+    if (candidates.length) {
+      setPreviewSources(candidates)
+      setPreviewSrc(candidates[0])
+      setPreviewIsVideo(true)
+      setPreviewLoading(false)
+    } else if (body?.thumbnail) {
+      setPreviewSources([])
+      setPreviewSrc(body.thumbnail)
+      setPreviewIsVideo(false)
+      setPreviewLoading(false)
+    } else {
+      setPreviewSources([])
+      setPreviewSrc('')
+      setPreviewLoading(true)
+    }
+    setPreviewOpen(true)
+  }
+
+  function requestAutoPreview(body, link) {
+    if (!autoPreviewRef.current) return
+    if (link?.kind === 'direct') openPreview(null, link.url)
+    else openPreview(body || remoteInfo)
+  }
+
+  function handlePreviewVideoError() {
+    const index = previewSources.indexOf(previewSrc)
+    const next = index >= 0 ? previewSources[index + 1] : previewSources[0]
+    if (next && next !== previewSrc) {
+      setPreviewSrc(next)
+      return
+    }
+    if (remoteInfo?.thumbnail) {
+      setPreviewIsVideo(false)
+      setPreviewSrc(remoteInfo.thumbnail)
+      showToast('Video playback was blocked here — showing the cover image.')
+      return
+    }
+    setPreviewLoading(false)
+    setPreviewError('Preview is not available for this link. You can still choose a format below.')
+  }
+
   function resetAll() {
+    closePreview()
     clearResult()
     setUrl('')
     setState('idle')
@@ -405,6 +480,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
 
     setInfo(result)
+    // The click itself is the preview request. A spinner covers the gap until
+    // /info hands us the playable CDN URL; the format/ad flow stays untouched.
+    autoPreviewRef.current = true
+    setPreviewSources([])
+    setPreviewSrc('')
+    setPreviewLoading(true)
+    setPreviewError('')
+    setPreviewOpen(true)
 
     if (result.kind === 'social') {
       const key = `${result.url}|${mode}`
@@ -417,6 +500,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
       if (cachedBody) {
         applyInfo(cachedBody, result)
+        requestAutoPreview(cachedBody, result)
         return
       }
       const controller = new AbortController()
@@ -429,9 +513,16 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       promise
         .then((body) => {
           if (controller.signal.aborted) return
-          applyInfo(body || prefetchRef.current.get(key), result)
+          const resolved = body || prefetchRef.current.get(key)
+          applyInfo(resolved, result)
+          requestAutoPreview(resolved, result)
         })
-        .catch(() => { /* provisional options stay usable */ })
+        .catch(() => {
+          if (autoPreviewRef.current) {
+            setPreviewLoading(false)
+            setPreviewError('Preview could not load. You can still choose a format below.')
+          }
+        })
         .finally(() => {
           if (!controller.signal.aborted) setInfoLoading(false)
         })
@@ -439,6 +530,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
 
     setState('direct')
+    requestAutoPreview(null, result)
   }
 
   // A tap prepares the file (again, idempotently) and opens the ad in the same
@@ -483,25 +575,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     startDownload(lastRequest || lastRequestRef.current)
   }
 
-  function openPreview() {
-    const video = remoteInfo?.media?.video
-    if (video) {
-      setPreviewIsVideo(true)
-      setPreviewSrc(video)
-    } else if (remoteInfo?.thumbnail) {
-      setPreviewIsVideo(false)
-      setPreviewSrc(remoteInfo.thumbnail)
-    } else {
-      showToast('Preview is still loading — try again in a moment')
-      return
-    }
-    setPreviewOpen(true)
-  }
-
   useEffect(() => {
     if (!previewOpen) return undefined
     function onKeyDown(event) {
-      if (event.key === 'Escape') setPreviewOpen(false)
+      if (event.key === 'Escape') closePreview()
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
@@ -750,6 +827,16 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                       <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                       Details
                     </span>
+                  )}
+                  {!remoteInfo?.thumbnail && previewCandidates(remoteInfo).length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => openPreview()}
+                      className="inline-flex items-center gap-1 rounded-full bg-teal-500/10 px-2.5 py-1 text-[10px] font-bold text-teal-700 transition hover:bg-teal-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    >
+                      <Play className="h-3 w-3 fill-teal-700" aria-hidden="true" />
+                      Preview
+                    </button>
                   )}
                 </div>
                 <p className="mt-3 text-sm font-bold text-slate-900">
@@ -1122,24 +1209,52 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           aria-modal="true"
           aria-label="Video preview"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setPreviewOpen(false)
+            if (event.target === event.currentTarget) closePreview()
           }}
         >
           <div className="relative w-full max-w-3xl">
             <button
               type="button"
-              onClick={() => setPreviewOpen(false)}
+              onClick={closePreview}
               aria-label="Close preview"
-              className="absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-900 shadow-lg transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+              className="absolute -top-2 right-0 z-20 grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-900 shadow-lg transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 sm:right-2"
             >
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
-            {previewIsVideo ? (
+
+            {previewLoading ? (
+              <div className="mx-auto flex min-h-[280px] max-w-md flex-col items-center justify-center gap-3 rounded-2xl bg-white p-8 text-center shadow-2xl">
+                <Loader2 className="h-7 w-7 animate-spin text-teal-600" aria-hidden="true" />
+                <p className="text-sm font-bold text-slate-900">Loading preview…</p>
+                <p className="text-xs text-slate-600">The video starts as soon as the link resolves.</p>
+              </div>
+            ) : previewError ? (
+              <div className="mx-auto max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
+                <AlertTriangle className="mx-auto h-8 w-8 text-amber-600" aria-hidden="true" />
+                <p className="mt-3 text-sm font-bold text-slate-900">Preview unavailable</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">{previewError}</p>
+                <button
+                  type="button"
+                  onClick={closePreview}
+                  className="mt-4 rounded-lg ss-gradient px-4 py-2 text-xs font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                >
+                  Choose format
+                </button>
+              </div>
+            ) : previewIsVideo ? (
               <video
+                ref={previewVideoRef}
                 src={previewSrc}
+                poster={remoteInfo?.thumbnail || undefined}
                 controls
                 autoPlay
+                muted
                 playsInline
+                preload="auto"
+                onCanPlay={(event) => {
+                  event.currentTarget.play().catch(() => {})
+                }}
+                onError={handlePreviewVideoError}
                 className="mx-auto max-h-[80dvh] w-full rounded-xl bg-black shadow-2xl"
               />
             ) : (
