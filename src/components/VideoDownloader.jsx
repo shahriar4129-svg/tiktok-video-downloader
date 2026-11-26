@@ -155,6 +155,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const lastRequestRef = useRef(null)
   const previewVideoRef = useRef(null)
   const warmAbortRef = useRef(null)
+  const previewWarmAbortRef = useRef(null)
+  const previewWarmedRef = useRef(new Set())
 
   async function postJson(path, body, signal) {
     const response = await fetch(path, {
@@ -299,6 +301,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     () => () => {
       prefetchAbortRef.current?.abort()
       abortRef.current?.abort()
+      warmAbortRef.current?.abort()
+      previewWarmAbortRef.current?.abort()
     },
     [],
   )
@@ -339,6 +343,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   function clearResult() {
     abortRef.current?.abort()
     warmAbortRef.current?.abort()
+    previewWarmAbortRef.current?.abort()
     setFileReady(false)
     setInfo(null)
     setRemoteInfo(null)
@@ -351,8 +356,42 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     pendingActionRef.current = null
   }
 
-  // Preview URLs come from the same /info answer that powers the download.
-  // The result card only holds the Preview button; the player is a popup.
+  // TikTok's signed CDN links reject cross-origin media requests (403 HTML),
+  // so the popup plays a same-origin stream backed by the prepared-file cache.
+  function buildPreviewUrl(qualityOverride = '') {
+    if (!info) return ''
+    if (info.kind !== 'social') return info.url
+    const params = new URLSearchParams()
+    params.set('url', info.url)
+    params.set('mode', mode === 'story' ? 'story' : 'video')
+    params.set('quality', qualityOverride || selectedQuality?.value || quality || '720')
+    if (variantRef.current) params.set('variant', variantRef.current)
+    if (mode === 'story' && storyId) params.set('storyId', storyId)
+    return `/api/video/preview?${params.toString()}`
+  }
+
+  // Prepare the preview file as soon as the result card appears, so clicking
+  // Preview starts playback instead of waiting for the first server fetch.
+  function warmPreview(qualityOverride = '') {
+    if (!info || info.kind !== 'social') return
+    const url = buildPreviewUrl(qualityOverride)
+    if (!url || previewWarmedRef.current.has(url)) return
+    previewWarmedRef.current.add(url)
+    previewWarmAbortRef.current?.abort()
+    const controller = new AbortController()
+    previewWarmAbortRef.current = controller
+    // Response headers mean the server has cached the file. Drop the body; the
+    // player streams it again from cache the moment the button is tapped.
+    fetch(url, { signal: controller.signal })
+      .then((response) => {
+        if (response.ok) controller.abort()
+        else previewWarmedRef.current.delete(url)
+      })
+      .catch(() => {
+        previewWarmedRef.current.delete(url)
+      })
+  }
+
   function previewCandidates(body) {
     const media = body?.media || {}
     const alternates = [
@@ -376,13 +415,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   }
 
   function openPreview(body = remoteInfo, directUrl = '') {
-    const candidates = directUrl ? [directUrl] : previewCandidates(body)
+    const previewUrl = directUrl || buildPreviewUrl()
+    const candidates = previewUrl ? [previewUrl] : previewCandidates(body)
     setPreviewError('')
     if (candidates.length) {
       setPreviewSources(candidates)
       setPreviewSrc(candidates[0])
       setPreviewIsVideo(true)
-      setPreviewLoading(false)
+      setPreviewLoading(true)
     } else if (body?.thumbnail) {
       setPreviewSources([])
       setPreviewSrc(body.thumbnail)
@@ -397,7 +437,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     setPreviewOpen(true)
   }
 
+  function handlePreviewReady(event) {
+    setPreviewLoading(false)
+    event.currentTarget.play().catch(() => {})
+  }
+
   function handlePreviewVideoError() {
+    setPreviewLoading(false)
     const index = previewSources.indexOf(previewSrc)
     const next = index >= 0 ? previewSources[index + 1] : previewSources[0]
     if (next && next !== previewSrc) {
@@ -410,7 +456,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       showToast('Video playback was blocked here — showing the cover image.')
       return
     }
-    setPreviewLoading(false)
     setPreviewError('Preview is not available for this link. You can still choose a format below.')
   }
 
@@ -474,10 +519,12 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     const heights = (body.formats || [])
       .map((item) => Number(item.height))
       .filter((height) => Number.isFinite(height) && height > 0)
-    if (heights.length) setQuality(String(Math.max(...heights)))
+    const bestQuality = heights.length ? String(Math.max(...heights)) : '720'
+    if (heights.length) setQuality(bestQuality)
     const firstStory = body.stories?.[0]?.id
     if (firstStory != null) setStoryId(String(firstStory))
     defaultPrepareParams(link, body).forEach(kickPrepare)
+    warmPreview(bestQuality)
   }
 
   function handleSubmit(event) {
@@ -874,7 +921,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                           key={item.value}
                           type="button"
                           aria-pressed={quality === item.value}
-                          onClick={() => setQuality(item.value)}
+                          onClick={() => {
+                            setQuality(item.value)
+                            warmPreview(item.value)
+                          }}
                           style={{ animationDelay: `${index * 45}ms` }}
                           className={`animate-option-in flex w-full items-center justify-between rounded-xl border px-3 py-2 text-[11px] font-bold transition active:scale-[0.99] motion-reduce:animate-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
                             quality === item.value
@@ -1253,30 +1303,34 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
               </div>
 
               <div className="flex min-h-[200px] flex-1 items-center justify-center overflow-y-auto bg-black p-3 sm:min-h-[280px]">
-                {previewLoading ? (
-                  <div className="flex items-center gap-2 text-center text-xs font-semibold text-slate-200">
-                    <Loader2 className="h-5 w-5 animate-spin text-teal-400" aria-hidden="true" />
-                    Loading preview…
-                  </div>
-                ) : previewError ? (
+                {previewError ? (
                   <div className="max-w-sm text-center">
                     <AlertTriangle className="mx-auto h-7 w-7 text-amber-400" aria-hidden="true" />
                     <p className="mt-2 text-xs font-semibold text-slate-200">{previewError}</p>
                   </div>
                 ) : previewIsVideo && previewSrc ? (
-                  <video
-                    ref={previewVideoRef}
-                    src={previewSrc}
-                    poster={remoteInfo?.thumbnail || undefined}
-                    controls
-                    autoPlay
-                    muted
-                    playsInline
-                    preload="auto"
-                    onCanPlay={(event) => event.currentTarget.play().catch(() => {})}
-                    onError={handlePreviewVideoError}
-                    className="max-h-[calc(100dvh-9rem)] w-full rounded-lg bg-black shadow-lg"
-                  />
+                  <div className="relative flex w-full items-center justify-center">
+                    <video
+                      ref={previewVideoRef}
+                      src={previewSrc}
+                      poster={remoteInfo?.thumbnail || undefined}
+                      controls
+                      autoPlay
+                      muted
+                      playsInline
+                      preload="auto"
+                      onLoadedData={handlePreviewReady}
+                      onCanPlay={handlePreviewReady}
+                      onError={handlePreviewVideoError}
+                      className="max-h-[calc(100dvh-9rem)] w-full rounded-lg bg-black shadow-lg"
+                    />
+                    {previewLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-lg bg-black/70 text-center text-xs font-semibold text-slate-200">
+                        <Loader2 className="h-5 w-5 animate-spin text-teal-400" aria-hidden="true" />
+                        Preparing preview…
+                      </div>
+                    )}
+                  </div>
                 ) : previewSrc ? (
                   <img
                     src={previewSrc}

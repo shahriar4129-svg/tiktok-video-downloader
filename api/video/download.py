@@ -239,18 +239,26 @@ def race_ydl_download(url, workdir, variants, video_format, mode, timeout=100, r
     return run()
 
 
-def iter_file(path):
+def iter_file(path, start=0, end=None):
     """Read in small chunks so the response is streamed, not buffered."""
     with open(path, "rb") as handle:
-        while True:
-            chunk = handle.read(CHUNK_SIZE)
+        handle.seek(start)
+        remaining = None if end is None else end - start + 1
+        while remaining is None or remaining > 0:
+            chunk = handle.read(CHUNK_SIZE if remaining is None else min(CHUNK_SIZE, remaining))
             if not chunk:
                 break
             yield chunk
+            if remaining is not None:
+                remaining -= len(chunk)
 
 
-def stream_file(path, meta, cleanup_dir=None):
-    """Share response headers between a fresh download and a cache hit."""
+def stream_file(path, meta, cleanup_dir=None, inline=False, request=None):
+    """Stream a prepared file for saving or for the inline preview player.
+
+    Preview uses the same on-disk file, so a 100 MB+ video is never buffered in
+    the browser. Range support keeps seeking and mobile playback reliable.
+    """
     size = os.path.getsize(path)
     if size > MAX_BYTES:
         return JSONResponse(
@@ -267,14 +275,20 @@ def stream_file(path, meta, cleanup_dir=None):
     )[:110]
     if not fallback.lower().endswith(extension.lower()):
         fallback += extension
-    disposition = (
-        f"attachment; filename=\"{fallback}\"; "
-        f"filename*=UTF-8''{quote(filename)}"
-    )
-    headers = {
-        "Content-Disposition": disposition,
-        "Content-Length": str(size),
-    }
+
+    if inline:
+        headers = {
+            "Content-Disposition": "inline",
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=300",
+        }
+    else:
+        disposition = (
+            f"attachment; filename=\"{fallback}\"; "
+            f"filename*=UTF-8''{quote(filename)}"
+        )
+        headers = {"Content-Disposition": disposition, "Accept-Ranges": "bytes"}
+
     if extension.lower() == ".mp3":
         media_type = "audio/mpeg"
     elif extension.lower() in (".jpg", ".jpeg", ".png"):
@@ -282,10 +296,37 @@ def stream_file(path, meta, cleanup_dir=None):
     else:
         media_type = "video/mp4"
 
+    start, end, status_code = 0, None, 200
+    range_header = request.headers.get("range") if request is not None else None
+    if range_header:
+        match = re.match(r"bytes=(\d*)-(\d*)", range_header.strip(), re.I)
+        if match:
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = int(last) if last else size - 1
+                end = min(end, size - 1)
+            elif last:
+                length = int(last)
+                if length > 0:
+                    start, end = max(0, size - length), size - 1
+            if start < size and end is not None and end >= start:
+                status_code = 206
+                headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+                headers["Content-Length"] = str(end - start + 1)
+    if status_code == 200:
+        headers["Content-Length"] = str(size)
+
     options = {}
     if cleanup_dir:
         options["background"] = BackgroundTask(shutil.rmtree, cleanup_dir, ignore_errors=True)
-    return StreamingResponse(iter_file(path), media_type=media_type, headers=headers, **options)
+    return StreamingResponse(
+        iter_file(path, start, end),
+        status_code=status_code,
+        media_type=media_type,
+        headers=headers,
+        **options,
+    )
 
 
 async def read_payload(request):
@@ -387,6 +428,17 @@ async def video_prepare(request: Request):
 @app.api_route("/video/download", methods=["GET", "POST"])
 @app.api_route("/api/video/download", methods=["GET", "POST"])
 async def video_download(request: Request):
+    return await handle_video_request(request, inline=False)
+
+
+@app.api_route("/preview", methods=["GET", "POST"])
+@app.api_route("/video/preview", methods=["GET", "POST"])
+@app.api_route("/api/video/preview", methods=["GET", "POST"])
+async def video_preview(request: Request):
+    return await handle_video_request(request, inline=True)
+
+
+async def handle_video_request(request: Request, inline=False):
     if not rate_allowed(client_ip(request), "download"):
         return JSONResponse({"error": RATE_MESSAGE}, status_code=429)
     params, error = parse_download_payload(await read_payload(request))
@@ -401,7 +453,7 @@ async def video_download(request: Request):
     cache_key = params["cache_key"]
     cached = cached_file(cache_key)
     if cached:
-        return stream_file(*cached)
+        return stream_file(*cached, inline=inline, request=request)
 
     workdir = tempfile.mkdtemp(prefix="tiktok-video-")
     last_error = None
@@ -566,7 +618,7 @@ async def video_download(request: Request):
                 path = make_real_mp3(path, workdir)
 
         store_file(cache_key, path, meta, os.path.getsize(path))
-        return stream_file(path, meta, workdir)
+        return stream_file(path, meta, workdir, inline=inline, request=request)
     except StoryError as exc:
         shutil.rmtree(workdir, ignore_errors=True)
         return JSONResponse({"error": str(exc)}, status_code=400)

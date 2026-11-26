@@ -765,7 +765,7 @@ def video_info():
     return error_response(with_hint("Could not read video information.", "generic"))
 
 
-def make_file_response(path, meta):
+def make_file_response(path, meta, inline=False):
     """Stream a prepared file from disk — never buffer a 100 MB file in RAM."""
     size = os.path.getsize(path)
     if size > MAX_BYTES:
@@ -794,7 +794,13 @@ def make_file_response(path, meta):
     else:
         mimetype = "video/mp4"
     response = send_file(path, mimetype=mimetype, conditional=True)
-    response.headers["Content-Disposition"] = disposition
+    if inline:
+        # Same-origin preview: no attachment, no filename header. The browser
+        # gets real bytes with Range support and can play/seek the clip.
+        response.headers["Content-Disposition"] = "inline"
+        response.headers["Cache-Control"] = "private, max-age=300"
+    else:
+        response.headers["Content-Disposition"] = disposition
     return response
 
 
@@ -1172,6 +1178,37 @@ def video_download():
     except Exception as exc:
         app.logger.error("video download failed [%s]: %s", type(exc).__name__, str(exc)[:500])
         return error_response(with_hint("Download failed.", error_category(exc)))
+
+
+def _prepared_file_response(data, inline):
+    params, error = parse_download_request(data)
+    if error:
+        return error
+    key = params["cache_key"]
+    hit = cached_file(key)
+    if not hit:
+        failure = wait_for_prepare(key)
+        if failure:
+            return error_response(with_hint("Preview failed.", error_category(failure)))
+        hit = cached_file(key)
+    if hit:
+        return make_file_response(*hit, inline=inline)
+    try:
+        return make_file_response(*build_prepared_file(params), inline=inline)
+    except StoryError as exc:
+        return error_response(str(exc))
+    except Exception as exc:
+        app.logger.error("video preview failed [%s]: %s", type(exc).__name__, str(exc)[:500])
+        return error_response(with_hint("Preview failed.", error_category(exc)))
+
+
+@app.get("/api/video/preview")
+@app.post("/api/video/preview")
+def video_preview():
+    # The popup plays this same-origin endpoint instead of TikTok's signed CDN
+    # URL, which is hotlink-protected and would be blocked by the browser.
+    data = dict(request.args) if request.method == "GET" else (json_body() or {})
+    return _prepared_file_response(data, inline=True)
 
 
 @app.route("/", defaults={"path": ""})

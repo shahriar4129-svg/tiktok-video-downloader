@@ -40,9 +40,11 @@ function securityHeaders() {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https:",
-    // Video downloader needs to fetch user-supplied direct URLs and play the blob.
+    // Preview plays signed TikTok CDN URLs directly; downloads use the same
+    // origin. Both blob/data and https media must be allowed here or the
+    // production meta policy blocks every remote video.
     "connect-src 'self' https: http:",
-    "media-src 'self' blob: data:",
+    "media-src 'self' blob: data: https:",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
