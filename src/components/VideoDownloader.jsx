@@ -236,6 +236,13 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     ]
   }
 
+  function bestQualityFrom(body) {
+    const heights = (body?.formats || [])
+      .map((item) => Number(item.height))
+      .filter((height) => Number.isFinite(height) && height > 0)
+    return heights.length ? String(Math.max(...heights)) : '720'
+  }
+
   // Start reading metadata the moment the link appears — no spinner on click.
   function prefetchInfo(rawUrl, currentMode) {
     const result = classifyUrl(rawUrl)
@@ -262,6 +269,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         if (body.variant) variantRef.current = body.variant
         rememberLink(result.url)
         defaultPrepareParams(result, body).forEach(kickPrepare)
+        // Start the preview stream now, before the visitor even presses
+        // Download. By the time the result card is on screen the file is ready.
+        warmPreview(bestQualityFrom(body), result)
         return body
       })
       .catch(() => {
@@ -523,7 +533,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     const heights = (body.formats || [])
       .map((item) => Number(item.height))
       .filter((height) => Number.isFinite(height) && height > 0)
-    const bestQuality = heights.length ? String(Math.max(...heights)) : '720'
+    const bestQuality = bestQualityFrom(body)
     if (heights.length) setQuality(bestQuality)
     const firstStory = body.stories?.[0]?.id
     if (firstStory != null) setStoryId(String(firstStory))
