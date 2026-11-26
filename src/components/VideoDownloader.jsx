@@ -1,5 +1,4 @@
 ﻿import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
   Check,
@@ -332,8 +331,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     pendingActionRef.current = null
   }
 
-  // Preview URLs come from the same /info answer that powers the download, so
-  // the clip starts as soon as Download is tapped — no extra Preview tap.
+  // Preview URLs come from the same /info answer that powers the download. The
+  // player lives inside the result card — no overlay, no popup dialog.
   function previewCandidates(body) {
     const media = body?.media || {}
     const alternates = [
@@ -489,9 +488,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
 
     setInfo(result)
-    // The click itself is the preview request. A spinner covers the gap until
-    // /info hands us the playable CDN URL; the format/ad flow stays untouched.
-    // Story mode picks from several clips, so it keeps the previous behaviour.
+    // The click itself starts the preview inside the result card. An inline
+    // spinner covers the gap until /info hands us the playable CDN URL; the
+    // format/ad flow stays untouched. Story mode keeps its clip picker.
     if (mode === 'story') {
       closePreview()
     } else {
@@ -802,22 +801,67 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           {state === 'social' && info && (
             <div className="grid w-full max-w-3xl gap-5 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
               <div className="min-w-0">
-                {remoteInfo?.thumbnail ? (
+                {previewOpen && previewLoading ? (
+                  <div className="mx-auto flex h-40 items-center justify-center gap-2 rounded-xl bg-slate-100 text-center sm:mx-0 sm:h-56">
+                    <Loader2 className="h-6 w-6 animate-spin text-teal-600" aria-hidden="true" />
+                    <span className="text-[11px] font-semibold text-slate-600">Loading preview…</span>
+                  </div>
+                ) : previewOpen && previewError ? (
+                  <div className="mx-auto flex h-40 flex-col items-center justify-center gap-2 rounded-xl bg-slate-100 p-4 text-center sm:mx-0 sm:h-56">
+                    <AlertTriangle className="h-6 w-6 text-amber-600" aria-hidden="true" />
+                    <p className="text-[11px] font-semibold text-slate-700">{previewError}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewError('')
+                        setPreviewOpen(false)
+                      }}
+                      className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold text-slate-700 shadow ring-1 ring-slate-200 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                    >
+                      Show cover
+                    </button>
+                  </div>
+                ) : previewOpen && previewIsVideo && previewSrc ? (
                   <div className="relative">
-                    <img
-                      src={remoteInfo.thumbnail}
-                      alt=""
-                      className="animate-preview-in mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg motion-reduce:animate-none sm:mx-0"
+                    <video
+                      ref={previewVideoRef}
+                      src={previewSrc}
+                      poster={remoteInfo?.thumbnail || undefined}
+                      controls
+                      autoPlay
+                      muted
+                      playsInline
+                      preload="auto"
+                      onCanPlay={(event) => event.currentTarget.play().catch(() => {})}
+                      onError={handlePreviewVideoError}
+                      className="animate-preview-in mx-auto max-h-64 w-full rounded-xl bg-black shadow-lg motion-reduce:animate-none sm:mx-0"
                     />
                     <button
                       type="button"
-                      onClick={openPreview}
-                      aria-label="Preview this video"
-                      className="absolute inset-0 m-auto flex h-fit w-fit items-center gap-1.5 rounded-full bg-slate-900/75 px-3 py-2 text-[11px] font-bold text-white shadow-lg ring-1 ring-white/40 backdrop-blur-sm transition hover:bg-slate-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                      onClick={closePreview}
+                      className="absolute right-2 top-2 rounded-full bg-slate-900/75 px-2.5 py-1 text-[10px] font-bold text-white shadow ring-1 ring-white/40 transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
                     >
-                      <Play className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
-                      Preview
+                      Stop preview
                     </button>
+                  </div>
+                ) : previewSrc || remoteInfo?.thumbnail ? (
+                  <div className="relative">
+                    <img
+                      src={previewSrc || remoteInfo.thumbnail}
+                      alt=""
+                      className="animate-preview-in mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg motion-reduce:animate-none sm:mx-0"
+                    />
+                    {!previewOpen && (
+                      <button
+                        type="button"
+                        onClick={() => openPreview()}
+                        aria-label="Preview this video"
+                        className="absolute inset-0 m-auto flex h-fit w-fit items-center gap-1.5 rounded-full bg-slate-900/75 px-3 py-2 text-[11px] font-bold text-white shadow-lg ring-1 ring-white/40 backdrop-blur-sm transition hover:bg-slate-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                      >
+                        <Play className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
+                        Preview
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="flex h-40 items-center justify-center rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 sm:h-56">
@@ -841,16 +885,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                       <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                       Details
                     </span>
-                  )}
-                  {!remoteInfo?.thumbnail && previewCandidates(remoteInfo).length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => openPreview()}
-                      className="inline-flex items-center gap-1 rounded-full bg-teal-500/10 px-2.5 py-1 text-[10px] font-bold text-teal-700 transition hover:bg-teal-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                    >
-                      <Play className="h-3 w-3 fill-teal-700" aria-hidden="true" />
-                      Preview
-                    </button>
                   )}
                 </div>
                 <p className="mt-3 text-sm font-bold text-slate-900">
@@ -1011,6 +1045,38 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
           {state === 'direct' && info && (
             <div className="w-full max-w-sm">
+              {previewOpen && previewLoading ? (
+                <div className="mb-4 flex h-40 items-center justify-center gap-2 rounded-xl bg-slate-100 text-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-teal-600" aria-hidden="true" />
+                  <span className="text-[11px] font-semibold text-slate-600">Loading preview…</span>
+                </div>
+              ) : previewOpen && previewError ? (
+                <p className="mb-4 rounded-xl bg-slate-100 p-3 text-[11px] font-semibold text-slate-700">
+                  {previewError}
+                </p>
+              ) : previewOpen && previewIsVideo && previewSrc ? (
+                <div className="relative mb-4">
+                  <video
+                    ref={previewVideoRef}
+                    src={previewSrc}
+                    controls
+                    autoPlay
+                    muted
+                    playsInline
+                    preload="auto"
+                    onCanPlay={(event) => event.currentTarget.play().catch(() => {})}
+                    onError={handlePreviewVideoError}
+                    className="mx-auto max-h-56 w-full rounded-xl bg-black shadow-lg"
+                  />
+                  <button
+                    type="button"
+                    onClick={closePreview}
+                    className="absolute right-2 top-2 rounded-full bg-slate-900/75 px-2.5 py-1 text-[10px] font-bold text-white shadow ring-1 ring-white/40 transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  >
+                    Stop preview
+                  </button>
+                </div>
+              ) : null}
               <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-teal-500/10 text-teal-700 ring-1 ring-inset ring-teal-400/30">
                 <Link2 className="h-7 w-7" aria-hidden="true" />
               </span>
@@ -1216,72 +1282,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
       <VignetteAd open={vignetteOpen} onClose={closeVignette} />
 
-      {previewOpen && typeof document !== 'undefined' && createPortal(
-        <div
-          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/90 p-4 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Video preview"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closePreview()
-          }}
-        >
-          <div className="relative w-full max-w-3xl">
-            <button
-              type="button"
-              onClick={closePreview}
-              aria-label="Close preview"
-              className="absolute -top-2 right-0 z-20 grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-900 shadow-lg transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 sm:right-2"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
-
-            {previewLoading ? (
-              <div className="mx-auto flex min-h-[280px] max-w-md flex-col items-center justify-center gap-3 rounded-2xl bg-white p-8 text-center shadow-2xl">
-                <Loader2 className="h-7 w-7 animate-spin text-teal-600" aria-hidden="true" />
-                <p className="text-sm font-bold text-slate-900">Loading preview…</p>
-                <p className="text-xs text-slate-600">The video starts as soon as the link resolves.</p>
-              </div>
-            ) : previewError ? (
-              <div className="mx-auto max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
-                <AlertTriangle className="mx-auto h-8 w-8 text-amber-600" aria-hidden="true" />
-                <p className="mt-3 text-sm font-bold text-slate-900">Preview unavailable</p>
-                <p className="mt-1 text-xs leading-relaxed text-slate-600">{previewError}</p>
-                <button
-                  type="button"
-                  onClick={closePreview}
-                  className="mt-4 rounded-lg ss-gradient px-4 py-2 text-xs font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                >
-                  Choose format
-                </button>
-              </div>
-            ) : previewIsVideo ? (
-              <video
-                ref={previewVideoRef}
-                src={previewSrc}
-                poster={remoteInfo?.thumbnail || undefined}
-                controls
-                autoPlay
-                muted
-                playsInline
-                preload="auto"
-                onCanPlay={(event) => {
-                  event.currentTarget.play().catch(() => {})
-                }}
-                onError={handlePreviewVideoError}
-                className="mx-auto max-h-[80dvh] w-full rounded-xl bg-black shadow-2xl"
-              />
-            ) : (
-              <img
-                src={previewSrc}
-                alt="Video preview"
-                className="mx-auto max-h-[80dvh] rounded-xl object-contain shadow-2xl"
-              />
-            )}
-          </div>
-        </div>,
-        document.body,
-      )}
     </div>
   )
 }
