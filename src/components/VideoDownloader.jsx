@@ -380,8 +380,17 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
   function requestAutoPreview(body, link) {
     if (!autoPreviewRef.current) return
-    if (link?.kind === 'direct') openPreview(null, link.url)
-    else openPreview(body || remoteInfo)
+    if (link?.kind === 'direct') {
+      openPreview(null, link.url)
+      return
+    }
+    const resolved = body || remoteInfo
+    if (!previewCandidates(resolved).length && !resolved?.thumbnail) {
+      setPreviewLoading(false)
+      setPreviewError('Preview is not available for this link. You can still choose a format below.')
+      return
+    }
+    openPreview(resolved)
   }
 
   function handlePreviewVideoError() {
@@ -482,12 +491,17 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     setInfo(result)
     // The click itself is the preview request. A spinner covers the gap until
     // /info hands us the playable CDN URL; the format/ad flow stays untouched.
-    autoPreviewRef.current = true
-    setPreviewSources([])
-    setPreviewSrc('')
-    setPreviewLoading(true)
-    setPreviewError('')
-    setPreviewOpen(true)
+    // Story mode picks from several clips, so it keeps the previous behaviour.
+    if (mode === 'story') {
+      closePreview()
+    } else {
+      autoPreviewRef.current = true
+      setPreviewSources([])
+      setPreviewSrc('')
+      setPreviewLoading(true)
+      setPreviewError('')
+      setPreviewOpen(true)
+    }
 
     if (result.kind === 'social') {
       const key = `${result.url}|${mode}`
