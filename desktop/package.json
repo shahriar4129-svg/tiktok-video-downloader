@@ -1,0 +1,53 @@
+{
+  "name": "tiktok-video-downloader-hd-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Windows desktop wrapper for TikTok Video Downloader HD",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.tiktokvideodownloaderhd.desktop",
+    "productName": "TikTok Video Downloader HD",
+    "copyright": "Copyright © 2026 TikTok Video Downloader HD",
+    "icon": "build/icon.ico",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "build/icon.ico"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "TikTok Video Downloader HD",
+      "artifactName": "TikTok-Video-Downloader-HD-${version}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "TikTok-Video-Downloader-HD-${version}-portable.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.5.0",
+    "electron-builder": "^26.18.0"
+  }
+}

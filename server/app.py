@@ -1188,8 +1188,8 @@ def frontend(path):
 
 
 if __name__ == "__main__":
-    # Local dev keeps Flask's reloader. Hosts like Render/Railway/Fly set PORT —
-    # there we serve with a real WSGI server and never expose the debugger.
+    # Hosts like Render/Railway/Fly set PORT; there we serve with a real WSGI
+    # server and never expose the debugger.
     port = int(os.environ.get("PORT", "8000"))
     production = bool(os.environ.get("PORT")) or os.environ.get("PRODUCTION") == "1"
 
@@ -1203,6 +1203,9 @@ if __name__ == "__main__":
             ) from exc
         serve(app, host="0.0.0.0", port=port, threads=8)
     else:
-        # Werkzeug's debug console allows remote code execution if reachable.
-        # Bind local dev to loopback; opt in to LAN only with HOST explicitly.
-        app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, debug=True)
+        # Keep local preview predictable: one process, no reloader child, no
+        # debugger console, and a clear "ready" line so it is obvious when the
+        # helper has finished importing yt-dlp/ffmpeg.
+        host = os.environ.get("HOST", "127.0.0.1")
+        print(f"Preview API ready at http://{host}:{port}", flush=True)
+        app.run(host=host, port=port, debug=False, use_reloader=False)

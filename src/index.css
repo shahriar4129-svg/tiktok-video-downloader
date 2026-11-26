@@ -5,6 +5,7 @@
 @theme {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --animate-ad-close-in: ad-close-in 350ms ease-out both;
+  --ease-ui-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 @keyframes ad-close-in {
@@ -64,6 +65,59 @@
     color: #0f3b38;
     opacity: 0.3;
     font-size: 18px;
+  }
+
+  /* Header navigation as small interactive boxes. Purpose: feedback — the
+     border, background and elevation change only while the pointer or press
+     is on the control. Transform/opacity only, so it stays on the compositor. */
+  .nav-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 6px 11px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background-color: #ffffff;
+    color: #475569;
+    box-shadow: 0 1px 1px rgb(15 23 42 / 0.03);
+    text-decoration: none;
+    transition:
+      transform 160ms var(--ease-ui-out),
+      background-color 160ms var(--ease-ui-out),
+      border-color 160ms var(--ease-ui-out),
+      box-shadow 160ms var(--ease-ui-out),
+      color 160ms var(--ease-ui-out);
+  }
+
+  .nav-box:active {
+    transform: scale(0.97);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-box:hover {
+    transform: translateY(-1px);
+    border-color: #5eead4;
+    background-color: #f0fdfa;
+    color: #0f766e;
+    box-shadow: 0 5px 14px -6px rgb(13 148 136 / 0.28);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-box {
+    transition-duration: 80ms;
+  }
+
+  .nav-box:active {
+    transform: none;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: reduce) {
+  .nav-box:hover {
+    transform: none;
   }
 }
 

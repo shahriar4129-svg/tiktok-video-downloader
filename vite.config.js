@@ -65,7 +65,14 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), securityHeaders()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
+      '/api': 'http://127.0.0.1:8000',
+    },
+  },
+  // `vite preview` serves only static files. Forward the API to the local
+  // helper so the download flow works in the production-like preview too.
+  preview: {
+    proxy: {
+      '/api': `http://127.0.0.1:${process.env.API_PORT || 8000}`,
     },
   },
 })

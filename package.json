@@ -7,7 +7,8 @@
     "dev": "vite --host",
     "prebuild": "node scripts/generate-ads.mjs",
     "build": "vite build",
-    "preview": "vite preview --host",
+    "preview": "node scripts/preview.mjs",
+    "preview:vite": "vite preview --host",
     "server": "python server/app.py",
     "start": "python server/app.py"
   },

@@ -1,6 +1,6 @@
 # TikTok Video Downloader HD
 
-> A free TikTok video downloader that runs in the browser. No login, no quota, no extension. An optional Android APK and iPhone Home Screen app are available.
+> A free TikTok video downloader that runs in the browser. No login, no quota, no extension. Optional Android APK, Windows .exe and iPhone Home Screen apps are available.
 
 Paste a public TikTok link, click Download, then choose MP4, MP3, or Story. The clean file is prepared in the background while a short ad is shown; closing the ad starts the save to the browser's default Downloads folder.
 
@@ -26,7 +26,7 @@ TikTok links go through a small Python function using yt-dlp and are streamed ba
 - [TikTok MP3 downloader](https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-mp3-downloader/)
 - [TikTok story downloader](https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-story-downloader/)
 - [TikTok video downloader for Android and iPhone](https://tiktokvideodownloaderhd.vercel.app/guides/tiktok-video-downloader-on-mobile/)
-- [Install the Android APK or iPhone Home Screen app](https://tiktokvideodownloaderhd.vercel.app/guides/install-app/)
+- [Install the Android APK, Windows .exe or iPhone Home Screen app](https://tiktokvideodownloaderhd.vercel.app/guides/install-app/)
 - [Full LLM reference](https://tiktokvideodownloaderhd.vercel.app/llms-full.txt)
 - [XML sitemap](https://tiktokvideodownloaderhd.vercel.app/sitemap.xml)
 - [Crawling rules](https://tiktokvideodownloaderhd.vercel.app/robots.txt)
@@ -41,7 +41,7 @@ The homepage has 30 FAQ answers in five sections: General FAQs, Download & Video
 - **Private or age-restricted clips?** Not supported; only public links can be read.
 - **Formats?** HD MP4, 192 kbps MP3, and active story MP4.
 - **Devices?** Chrome, Safari, Firefox, and Edge on Windows, macOS, Linux, Android, and iOS.
-- **Phone app?** Optional: Android APK and iPhone Add to Home Screen (PWA); the browser tool itself needs no install.
+- **Device app?** Optional: Android APK, Windows .exe (portable or installer) and iPhone Add to Home Screen (PWA); the browser tool itself needs no install.
 - **Where does the file go?** To the browser's default Downloads folder.
 - **Do you store links or files?** No. Files are streamed directly and nothing is kept after the request.
 

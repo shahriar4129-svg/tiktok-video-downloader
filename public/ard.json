@@ -13,14 +13,15 @@
         "MP3Extraction",
         "StoryDownload",
         "InstallablePWA",
-        "AndroidAPK"
+        "AndroidAPK",
+        "WindowsDesktopApp"
       ],
       "representativeQueries": [
         "how to download TikTok videos without watermark",
         "convert a TikTok video to MP3",
         "save an active TikTok story as MP4",
         "download TikTok videos on Android or iPhone without an app",
-        "install the TikTok Video Downloader HD Android APK or iPhone Home Screen app"
+        "install the TikTok Video Downloader HD Android APK, Windows .exe or iPhone Home Screen app"
       ],
       "tags": [
         "tiktok",
@@ -31,7 +32,7 @@
         "no watermark"
       ],
       "version": "1.0.0",
-      "updatedAt": "2026-11-25T00:00:00Z"
+      "updatedAt": "2026-11-26T00:00:00Z"
     }
   ]
 }

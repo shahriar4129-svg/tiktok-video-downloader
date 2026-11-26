@@ -46,11 +46,11 @@ export default function App() {
               <p className="text-[10px] font-medium text-slate-600 sm:text-[11px]">Download TikTok videos in HD.</p>
             </div>
           </button>
-          <nav className="hidden items-center gap-5 text-[13px] font-semibold text-slate-600 md:flex" aria-label="Main">
-            <a href="#tool" className="transition hover:text-teal-600">TikTok Downloader</a>
-            <a href="#faq" className="transition hover:text-teal-600">FAQ</a>
-            <a href="/guides/" className="transition hover:text-teal-600">Guides</a>
-            <a href="/guides/install-app/" className="transition hover:text-teal-600">Install app</a>
+          <nav className="hidden items-center gap-2 text-[13px] font-semibold md:flex" aria-label="Main">
+            <a href="#tool" className="nav-box">TikTok Downloader</a>
+            <a href="#faq" className="nav-box">FAQ</a>
+            <a href="/guides/" className="nav-box">Guides</a>
+            <a href="/guides/install-app/" className="nav-box">Install app</a>
           </nav>
           <div className="flex items-center gap-2">
             <HeaderPromo />
@@ -60,6 +60,15 @@ export default function App() {
             </span>
           </div>
         </div>
+        <nav
+          className="flex gap-2 overflow-x-auto px-4 pb-3 text-[12px] font-semibold [scrollbar-width:none] md:hidden [&::-webkit-scrollbar]:hidden"
+          aria-label="Main mobile"
+        >
+          <a href="#tool" className="nav-box shrink-0">TikTok Downloader</a>
+          <a href="#faq" className="nav-box shrink-0">FAQ</a>
+          <a href="/guides/" className="nav-box shrink-0">Guides</a>
+          <a href="/guides/install-app/" className="nav-box shrink-0">Install app</a>
+        </nav>
       </header>
 
       <main id="tool" className="mx-auto max-w-6xl px-4 pb-16 sm:px-6">
