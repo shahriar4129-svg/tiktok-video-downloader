@@ -29,7 +29,6 @@ from tikwm import tikwm_data, tikwm_media_candidates  # noqa: E402
 from vercel_core import (  # noqa: E402
     FFMPEG,
     MAX_BYTES,
-    account_name,
     cached_file,
     cached_info,
     cffi_requests,
@@ -46,7 +45,6 @@ from vercel_core import (  # noqa: E402
     parse_quality,
     rate_allowed,
     safe_extension,
-    SITE_NAME,
     StoryError,
     story_media,
     STRATEGIES,
@@ -268,13 +266,8 @@ def stream_file(path, meta, cleanup_dir=None, inline=False, request=None):
 
     extension = safe_extension(path)
     filename = download_filename(meta, extension)
-    # ASCII fallback uses the same account + ID + site shape as filename*.
-    video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(meta.get("id") or ""))[:24]
-    fallback = "_".join(
-        part for part in (account_name(meta), video_id, SITE_NAME) if part
-    )[:110]
-    if not fallback.lower().endswith(extension.lower()):
-        fallback += extension
+    # ASCII fallback keeps the same title + handle + number + site shape.
+    fallback = download_filename(meta, extension, ascii_only=True)
 
     if inline:
         headers = {

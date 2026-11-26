@@ -20,6 +20,7 @@ import socket
 import tempfile
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlparse
 
@@ -676,11 +677,12 @@ def safe_filename(title, extension=".mp4"):
     return (cleaned[:100] or "video") + extension
 
 
-SITE_NAME = "TikTok Video Downloader"
+SITE_NAME = "TikTok Video Downloader HD"
+MAX_FILENAME_BYTES = 220
 
 
 def account_name(meta):
-    """Clean TikTok handle used as the first part of every saved filename."""
+    """Clean TikTok handle used in every saved filename."""
     source = meta if isinstance(meta, dict) else {}
     for key in ("uploader", "uploader_id", "channel", "channel_id", "author", "username"):
         value = source.get(key)
@@ -695,23 +697,96 @@ def account_name(meta):
     return "tiktok-video"
 
 
-def download_filename(meta, extension=".mp4"):
-    """Name saved files as: account_uniqueNumber_website.ext.
+def account_handle(meta):
+    """The account part with a visible @ prefix."""
+    return "@" + account_name(meta)
 
-    The video title is intentionally excluded. The account makes the file
-    recognisable, the TikTok ID guarantees uniqueness even for reposts, and the
+
+def _clip_utf8(value, max_bytes):
+    """Keep long Bangla/Unicode titles from breaking the saved filename."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    clipped = encoded[:max_bytes].decode("utf-8", "ignore")
+    # Never leave a Bangla vowel/conjunct mark hanging at the cut point.
+    while clipped and unicodedata.category(clipped[-1])[0] == "M":
+        clipped = clipped[:-1]
+    return clipped.rstrip(" ._-")
+
+
+def _title_char_kept(character):
+    """Keep letters, marks, numbers and spaces — including Bangla vowel signs."""
+    if character.isspace() or character == "-":
+        return True
+    return unicodedata.category(character)[0] in ("L", "M", "N")
+
+
+def _short_summary(value, limit):
+    """First meaningful words of a title, without hashtags or unsafe chars."""
+    text = re.sub(r"#\S+", " ", str(value or ""))
+    text = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", " ", text)
+    text = "".join(char if _title_char_kept(char) else " " for char in text)
+    text = re.sub(r"\s+", " ", text).strip(" ._-")
+    if not text:
+        return "tiktok-video"
+
+    words = []
+    used = 0
+    for word in text.split():
+        part = word if not words else " " + word
+        if used + len(part) > limit and words:
+            break
+        words.append(part)
+        used += len(part)
+    return "".join(words)[:limit].rstrip(" ._-") or "tiktok-video"
+
+
+def title_summary(meta, ascii_only=False):
+    """Short, readable title snippet for the saved filename."""
+    source = meta if isinstance(meta, dict) else {}
+    title = source.get("title") or source.get("desc") or "video"
+    if not ascii_only:
+        return _short_summary(title, 42)
+
+    # Older browsers ignore filename*, so the ASCII fallback needs its own
+    # reduced title. Non-Latin scripts become spaces instead of junk bytes.
+    plain = re.sub(r"[^\x20-\x7E]", " ", str(title))
+    return _short_summary(plain, 28)
+
+
+def short_unique_number(meta):
+    """Stable 8-digit number derived from the TikTok video ID."""
+    source = meta if isinstance(meta, dict) else {}
+    raw = str(
+        source.get("id") or source.get("video_id")
+        or source.get("aweme_id") or ""
+    ).strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) >= 6:
+        return digits[-8:].zfill(8)
+    if raw:
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return str(int(digest[:12], 16) % 100000000).zfill(8)
+    return "00000000"
+
+
+def download_filename(meta, extension=".mp4", ascii_only=False):
+    """Name saved files as: titleSummary_@handle_8digits_website.ext.
+
+    The title snippet makes files recognisable, the handle keeps the creator
+    visible, the numeric ID suffix keeps reposts/duplicates distinct, and the
     site name brands the result. Keeping this in one helper gives the local
     server and the Vercel functions byte-for-byte identical filenames.
     """
     source = meta if isinstance(meta, dict) else {}
-    account = account_name(source)
-    video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(source.get("id") or ""))[:24]
-    if not video_id:
-        video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(source.get("video_id") or ""))[:24]
-    parts = [account]
-    if video_id:
-        parts.append(video_id)
-    return "_".join(parts) + "_" + SITE_NAME + extension
+    parts = [
+        title_summary(source, ascii_only=ascii_only),
+        account_handle(source),
+        short_unique_number(source),
+        SITE_NAME,
+    ]
+    base = "_".join(part for part in parts if part)
+    return _clip_utf8(base, MAX_FILENAME_BYTES) + extension
 
 
 # ---------------------------------------------------------------------------

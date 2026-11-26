@@ -28,7 +28,6 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 
 # Story helpers live in the shared core module (same directory as this file).
 from vercel_core import (  # noqa: E402
-    account_name,
     cached_file,
     cffi_requests,
     client_ip,
@@ -41,7 +40,6 @@ from vercel_core import (  # noqa: E402
     rate_allowed,
     SECURITY_HEADERS,
     safe_extension,
-    SITE_NAME,
     StoryError,
     store_file,
     story_media,
@@ -773,15 +771,8 @@ def make_file_response(path, meta, inline=False):
 
     extension = safe_extension(path)
     preferred = download_filename(meta, extension)
-
-    # Browsers that ignore filename*= still get the same account + ID + site
-    # shape, without depending on a Unicode title.
-    video_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(meta.get("id") or ""))[:24]
-    fallback = "_".join(
-        part for part in (account_name(meta), video_id, SITE_NAME) if part
-    )[:110]
-    if not fallback.lower().endswith(extension.lower()):
-        fallback += extension
+    # Browsers that ignore filename* get the same shape with an ASCII title.
+    fallback = download_filename(meta, extension, ascii_only=True)
     disposition = (
         f"attachment; filename=\"{fallback}\"; "
         f"filename*=UTF-8''{quote(preferred, safe='')}"
