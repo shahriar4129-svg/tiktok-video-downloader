@@ -25,12 +25,12 @@ function loadAdsense(client) {
  * viewport and scales down cleanly on phones and very small windows.
  * Everything is controlled from src/config/ads.js (vignette section).
  */
-export default function VignetteAd({ open, onClose }) {
+export default function VignetteAd({ open, ready = true, onClose }) {
   const contentRef = useRef(null)
   const pushedRef = useRef(false)
   const scriptsRef = useRef(false)
-  // Close is on a fixed 4s ad beat. The file is warmed from the link paste and
-  // the save waits for it after Close, so processing never delays the option.
+  // Close appears after the fixed 4s ad beat AND after the file is warmed by
+  // the downloader, so pressing Close means the stream is ready to save.
   const [showClose, setShowClose] = useState(false)
 
   const client = ADS.adsense?.client || ''
@@ -45,13 +45,12 @@ export default function VignetteAd({ open, onClose }) {
   // Minimum ad view time, configurable in src/config/ads.js. Fixed at 4s.
   const minMs = Number(config.minMs) > 0 ? Number(config.minMs) : 4000
 
-  function handleClose() {
-    // The button only exists after the ad beat, so no extra gate is needed.
-    onClose()
-  }
+  // Close/Remove ads appear together only when both gates are satisfied.
+  const readyToClose = showClose && ready
 
-  // Close/Remove ads appear together at 4s, regardless of the background job.
-  const readyToClose = showClose
+  function handleClose() {
+    if (readyToClose) onClose()
+  }
 
   useEffect(() => {
     if (!open || !canRun) {
@@ -101,7 +100,7 @@ export default function VignetteAd({ open, onClose }) {
     }
 
     function onKeyDown(event) {
-      if (event.key === 'Escape' && showClose) onClose()
+      if (event.key === 'Escape' && readyToClose) onClose()
     }
     document.addEventListener('keydown', onKeyDown)
 
@@ -109,7 +108,7 @@ export default function VignetteAd({ open, onClose }) {
       document.body.style.overflow = previousOverflow
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [open, onClose, showClose, useCustom, useAdsense, useSlot, client])
+  }, [open, onClose, readyToClose, useCustom, useAdsense, useSlot, client])
 
   if (!open || !canRun || typeof document === 'undefined') return null
 
@@ -120,7 +119,7 @@ export default function VignetteAd({ open, onClose }) {
       aria-modal="true"
       aria-label="Advertisement"
       onMouseDown={(event) => {
-        if (showClose && event.target === event.currentTarget) onClose()
+        if (readyToClose && event.target === event.currentTarget) onClose()
       }}
     >
       <div className="animate-ad-card-in relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl motion-reduce:animate-none sm:max-h-[calc(100dvh-2rem)]">
@@ -140,7 +139,7 @@ export default function VignetteAd({ open, onClose }) {
             Advertisement
           </span>
           <span className="text-right text-[9px] font-semibold text-slate-400 sm:text-[10px]">
-            {!showClose ? 'Close appears in a moment' : ''}
+            {!showClose ? 'Close appears in a moment' : !ready ? 'Preparing file…' : ''}
           </span>
         </div>
 

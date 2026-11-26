@@ -138,6 +138,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const [previewSources, setPreviewSources] = useState([])
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState('')
+  const [fileReady, setFileReady] = useState(false)
   const [lastRequest, setLastRequest] = useState(null)
 
   const prefetchRef = useRef(new Map())
@@ -152,7 +153,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   const vignetteShownRef = useRef(false)
   const lastRequestRef = useRef(null)
   const previewVideoRef = useRef(null)
-  const autoPreviewRef = useRef(false)
+  const warmAbortRef = useRef(null)
 
   async function postJson(path, body, signal) {
     const response = await fetch(path, {
@@ -320,6 +321,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
   function clearResult() {
     abortRef.current?.abort()
+    warmAbortRef.current?.abort()
+    setFileReady(false)
     setInfo(null)
     setRemoteInfo(null)
     setInfoLoading(false)
@@ -344,7 +347,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
   }
 
   function closePreview() {
-    autoPreviewRef.current = false
     setPreviewOpen(false)
     setPreviewLoading(false)
     setPreviewError('')
@@ -372,24 +374,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     } else {
       setPreviewSources([])
       setPreviewSrc('')
-      setPreviewLoading(true)
-    }
-    setPreviewOpen(true)
-  }
-
-  function requestAutoPreview(body, link) {
-    if (!autoPreviewRef.current) return
-    if (link?.kind === 'direct') {
-      openPreview(null, link.url)
-      return
-    }
-    const resolved = body || remoteInfo
-    if (!previewCandidates(resolved).length && !resolved?.thumbnail) {
       setPreviewLoading(false)
       setPreviewError('Preview is not available for this link. You can still choose a format below.')
-      return
     }
-    openPreview(resolved)
+    setPreviewOpen(true)
   }
 
   function handlePreviewVideoError() {
@@ -488,19 +476,9 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
 
     setInfo(result)
-    // The click itself starts the preview inside the result card. An inline
-    // spinner covers the gap until /info hands us the playable CDN URL; the
-    // format/ad flow stays untouched. Story mode keeps its clip picker.
-    if (mode === 'story') {
-      closePreview()
-    } else {
-      autoPreviewRef.current = true
-      setPreviewSources([])
-      setPreviewSrc('')
-      setPreviewLoading(true)
-      setPreviewError('')
-      setPreviewOpen(true)
-    }
+    // Preview is opt-in now: Download only resolves the link and renders the
+    // result card. The visitor taps the preview option when they want to watch.
+    closePreview()
 
     if (result.kind === 'social') {
       const key = `${result.url}|${mode}`
@@ -513,7 +491,6 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
       if (cachedBody) {
         applyInfo(cachedBody, result)
-        requestAutoPreview(cachedBody, result)
         return
       }
       const controller = new AbortController()
@@ -528,14 +505,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           if (controller.signal.aborted) return
           const resolved = body || prefetchRef.current.get(key)
           applyInfo(resolved, result)
-          requestAutoPreview(resolved, result)
         })
-        .catch(() => {
-          if (autoPreviewRef.current) {
-            setPreviewLoading(false)
-            setPreviewError('Preview could not load. You can still choose a format below.')
-          }
-        })
+        .catch(() => { /* provisional options stay usable */ })
         .finally(() => {
           if (!controller.signal.aborted) setInfoLoading(false)
         })
@@ -543,11 +514,34 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
 
     setState('direct')
-    requestAutoPreview(null, result)
   }
 
-  // A tap prepares the file (again, idempotently) and opens the ad in the same
-  // tick. Nothing waits on the preparation before the ad appears.
+  function warmDownload(params) {
+    warmAbortRef.current?.abort()
+    if (params.kind === 'direct') {
+      setFileReady(true)
+      return
+    }
+    setFileReady(false)
+    const controller = new AbortController()
+    warmAbortRef.current = controller
+    // Prepare the file in the download function while the ad is on screen.
+    // Response headers mean the server already cached the bytes; stop the body
+    // transfer here so the click after Close is a plain stream from cache.
+    fetch(buildDownloadUrl(params), { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error('warm-up failed')
+        controller.abort()
+        setFileReady(true)
+      })
+      .catch(() => {
+        // Never trap the visitor behind the ad: fall back to the normal path.
+        setFileReady(true)
+      })
+  }
+
+  // The ad opens on the same tick as the tap. Close waits for the 4-second ad
+  // beat AND the warm-up above, so pressing Close means the file is ready.
   function handleSaveOption(kind) {
     if (vignetteOpen || !info) return
     let params
@@ -563,14 +557,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     }
     lastRequestRef.current = params
     setLastRequest(params)
-    kickPrepare({
-      url: params.url,
-      mode: params.mode,
-      quality: params.quality,
-      storyId: params.storyId,
-      variant: params.variant,
-      media: remoteInfo?.media,
-    })
+    warmDownload(params)
     runWithAd(() => startDownload(params))
   }
 
@@ -864,8 +851,18 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                     )}
                   </div>
                 ) : (
-                  <div className="flex h-40 items-center justify-center rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 sm:h-56">
+                  <div className="flex h-40 flex-col items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 sm:h-56">
                     <Video className="h-10 w-10 text-slate-400" aria-hidden="true" />
+                    {!previewOpen && previewCandidates(remoteInfo).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => openPreview()}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-teal-700 shadow ring-1 ring-slate-200 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                      >
+                        <Play className="h-3.5 w-3.5 fill-teal-700" aria-hidden="true" />
+                        Preview
+                      </button>
+                    )}
                   </div>
                 )}
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
@@ -1076,6 +1073,15 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
                     Stop preview
                   </button>
                 </div>
+              ) : !previewOpen ? (
+                <button
+                  type="button"
+                  onClick={() => openPreview(null, info.url)}
+                  className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-teal-500/10 px-3 py-1.5 text-[11px] font-bold text-teal-700 transition hover:bg-teal-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                >
+                  <Play className="h-3.5 w-3.5 fill-teal-700" aria-hidden="true" />
+                  Preview video
+                </button>
               ) : null}
               <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-teal-500/10 text-teal-700 ring-1 ring-inset ring-teal-400/30">
                 <Link2 className="h-7 w-7" aria-hidden="true" />
@@ -1280,7 +1286,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
         </p>
       </section>
 
-      <VignetteAd open={vignetteOpen} onClose={closeVignette} />
+      <VignetteAd open={vignetteOpen} ready={fileReady} onClose={closeVignette} />
 
     </div>
   )
