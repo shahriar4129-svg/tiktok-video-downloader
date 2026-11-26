@@ -941,11 +941,13 @@ def build_prepared_file(params, stale=None):
                 if not tiktok or cffi_requests is None:
                     return None, None, None
                 mirror_key = "audio_alternates" if mode == "mp3" else "video_alternates"
-                candidates = [hint.get("audio" if mode == "mp3" else "video")]
+                candidates = []
                 if mode != "mp3":
                     # Honour the chosen quality when the resolver supplied
-                    # per-resolution mirrors; the generic list is fallback.
+                    # per-resolution mirrors; the generic stream is only a
+                    # fallback after those exact-height URLs.
                     candidates += list((hint.get("by_height") or {}).get(str(height)) or [])
+                candidates += [hint.get("audio" if mode == "mp3" else "video")]
                 candidates += list(hint.get(mirror_key) or [])
                 mirrors = []
                 for candidate in candidates:

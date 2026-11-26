@@ -500,7 +500,10 @@ async def handle_video_request(request: Request, inline=False):
                 if isinstance(raw_media, str) and raw_media.strip():
                     try:
                         primary_url = validate_media_url(raw_media)
-                        mirrors = [primary_url] + [item for item in mirrors if item != primary_url]
+                        # The generic "video" hint is the default stream, not
+                        # necessarily the chosen quality. Keep it as the last
+                        # fallback so by_height mirrors win for 720p/576p.
+                        mirrors = [item for item in mirrors if item != primary_url] + [primary_url]
                     except (ValueError, TypeError) as exc:
                         log_failure("media hint", exc)
 
