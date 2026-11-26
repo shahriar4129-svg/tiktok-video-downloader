@@ -358,11 +358,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
   // TikTok's signed CDN links reject cross-origin media requests (403 HTML),
   // so the popup plays a same-origin stream backed by the prepared-file cache.
-  function buildPreviewUrl(qualityOverride = '') {
-    if (!info) return ''
-    if (info.kind !== 'social') return info.url
+  function buildPreviewUrl(qualityOverride = '', infoOverride = info) {
+    // Async /info callbacks capture the render where `info` was still null.
+    // Accept an explicit link so the warm-up is never skipped on a cold load.
+    const source = infoOverride || info
+    if (!source) return ''
+    if (source.kind !== 'social') return source.url
     const params = new URLSearchParams()
-    params.set('url', info.url)
+    params.set('url', source.url)
     params.set('mode', mode === 'story' ? 'story' : 'video')
     params.set('quality', qualityOverride || selectedQuality?.value || quality || '720')
     if (variantRef.current) params.set('variant', variantRef.current)
@@ -372,9 +375,10 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
   // Prepare the preview file as soon as the result card appears, so clicking
   // Preview starts playback instead of waiting for the first server fetch.
-  function warmPreview(qualityOverride = '') {
-    if (!info || info.kind !== 'social') return
-    const url = buildPreviewUrl(qualityOverride)
+  function warmPreview(qualityOverride = '', infoOverride = info) {
+    const source = infoOverride || info
+    if (!source || source.kind !== 'social') return
+    const url = buildPreviewUrl(qualityOverride, source)
     if (!url || previewWarmedRef.current.has(url)) return
     previewWarmedRef.current.add(url)
     previewWarmAbortRef.current?.abort()
@@ -524,7 +528,7 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     const firstStory = body.stories?.[0]?.id
     if (firstStory != null) setStoryId(String(firstStory))
     defaultPrepareParams(link, body).forEach(kickPrepare)
-    warmPreview(bestQuality)
+    warmPreview(bestQuality, link)
   }
 
   function handleSubmit(event) {
