@@ -1,4 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
   Check,
@@ -319,6 +320,22 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     onResultStateChange?.(state !== 'idle')
   }, [state, onResultStateChange])
 
+  // The preview is a modal popup: Escape and the backdrop close it, and page
+  // scrolling is paused while the player is open.
+  useEffect(() => {
+    if (!previewOpen) return undefined
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') closePreview()
+    }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [previewOpen])
+
   function clearResult() {
     abortRef.current?.abort()
     warmAbortRef.current?.abort()
@@ -334,8 +351,8 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
     pendingActionRef.current = null
   }
 
-  // Preview URLs come from the same /info answer that powers the download. The
-  // player lives inside the result card — no overlay, no popup dialog.
+  // Preview URLs come from the same /info answer that powers the download.
+  // The result card only holds the Preview button; the player is a popup.
   function previewCandidates(body) {
     const media = body?.media || {}
     const alternates = [
@@ -788,72 +805,27 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
           {state === 'social' && info && (
             <div className="grid w-full max-w-3xl gap-5 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
               <div className="min-w-0">
-                {previewOpen && previewLoading ? (
-                  <div className="mx-auto flex h-40 items-center justify-center gap-2 rounded-xl bg-slate-100 text-center sm:mx-0 sm:h-56">
-                    <Loader2 className="h-6 w-6 animate-spin text-teal-600" aria-hidden="true" />
-                    <span className="text-[11px] font-semibold text-slate-600">Loading preview…</span>
-                  </div>
-                ) : previewOpen && previewError ? (
-                  <div className="mx-auto flex h-40 flex-col items-center justify-center gap-2 rounded-xl bg-slate-100 p-4 text-center sm:mx-0 sm:h-56">
-                    <AlertTriangle className="h-6 w-6 text-amber-600" aria-hidden="true" />
-                    <p className="text-[11px] font-semibold text-slate-700">{previewError}</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPreviewError('')
-                        setPreviewOpen(false)
-                      }}
-                      className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold text-slate-700 shadow ring-1 ring-slate-200 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                    >
-                      Show cover
-                    </button>
-                  </div>
-                ) : previewOpen && previewIsVideo && previewSrc ? (
-                  <div className="relative">
-                    <video
-                      ref={previewVideoRef}
-                      src={previewSrc}
-                      poster={remoteInfo?.thumbnail || undefined}
-                      controls
-                      autoPlay
-                      muted
-                      playsInline
-                      preload="auto"
-                      onCanPlay={(event) => event.currentTarget.play().catch(() => {})}
-                      onError={handlePreviewVideoError}
-                      className="animate-preview-in mx-auto max-h-64 w-full rounded-xl bg-black shadow-lg motion-reduce:animate-none sm:mx-0"
-                    />
-                    <button
-                      type="button"
-                      onClick={closePreview}
-                      className="absolute right-2 top-2 rounded-full bg-slate-900/75 px-2.5 py-1 text-[10px] font-bold text-white shadow ring-1 ring-white/40 transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                    >
-                      Stop preview
-                    </button>
-                  </div>
-                ) : previewSrc || remoteInfo?.thumbnail ? (
+                {remoteInfo?.thumbnail ? (
                   <div className="relative">
                     <img
-                      src={previewSrc || remoteInfo.thumbnail}
+                      src={remoteInfo.thumbnail}
                       alt=""
                       className="animate-preview-in mx-auto max-h-64 w-full rounded-xl object-cover shadow-lg motion-reduce:animate-none sm:mx-0"
                     />
-                    {!previewOpen && (
-                      <button
-                        type="button"
-                        onClick={() => openPreview()}
-                        aria-label="Preview this video"
-                        className="absolute inset-0 m-auto flex h-fit w-fit items-center gap-1.5 rounded-full bg-slate-900/75 px-3 py-2 text-[11px] font-bold text-white shadow-lg ring-1 ring-white/40 backdrop-blur-sm transition hover:bg-slate-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                      >
-                        <Play className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
-                        Preview
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => openPreview()}
+                      aria-label="Preview this video"
+                      className="absolute inset-0 m-auto flex h-fit w-fit items-center gap-1.5 rounded-full bg-slate-900/75 px-3 py-2 text-[11px] font-bold text-white shadow-lg ring-1 ring-white/40 backdrop-blur-sm transition hover:bg-slate-900/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                    >
+                      <Play className="h-3.5 w-3.5 fill-white" aria-hidden="true" />
+                      Preview
+                    </button>
                   </div>
                 ) : (
                   <div className="flex h-40 flex-col items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 sm:h-56">
                     <Video className="h-10 w-10 text-slate-400" aria-hidden="true" />
-                    {!previewOpen && previewCandidates(remoteInfo).length > 0 && (
+                    {previewCandidates(remoteInfo).length > 0 && (
                       <button
                         type="button"
                         onClick={() => openPreview()}
@@ -1042,47 +1014,14 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
 
           {state === 'direct' && info && (
             <div className="w-full max-w-sm">
-              {previewOpen && previewLoading ? (
-                <div className="mb-4 flex h-40 items-center justify-center gap-2 rounded-xl bg-slate-100 text-center">
-                  <Loader2 className="h-6 w-6 animate-spin text-teal-600" aria-hidden="true" />
-                  <span className="text-[11px] font-semibold text-slate-600">Loading preview…</span>
-                </div>
-              ) : previewOpen && previewError ? (
-                <p className="mb-4 rounded-xl bg-slate-100 p-3 text-[11px] font-semibold text-slate-700">
-                  {previewError}
-                </p>
-              ) : previewOpen && previewIsVideo && previewSrc ? (
-                <div className="relative mb-4">
-                  <video
-                    ref={previewVideoRef}
-                    src={previewSrc}
-                    controls
-                    autoPlay
-                    muted
-                    playsInline
-                    preload="auto"
-                    onCanPlay={(event) => event.currentTarget.play().catch(() => {})}
-                    onError={handlePreviewVideoError}
-                    className="mx-auto max-h-56 w-full rounded-xl bg-black shadow-lg"
-                  />
-                  <button
-                    type="button"
-                    onClick={closePreview}
-                    className="absolute right-2 top-2 rounded-full bg-slate-900/75 px-2.5 py-1 text-[10px] font-bold text-white shadow ring-1 ring-white/40 transition hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                  >
-                    Stop preview
-                  </button>
-                </div>
-              ) : !previewOpen ? (
-                <button
-                  type="button"
-                  onClick={() => openPreview(null, info.url)}
-                  className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-teal-500/10 px-3 py-1.5 text-[11px] font-bold text-teal-700 transition hover:bg-teal-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
-                >
-                  <Play className="h-3.5 w-3.5 fill-teal-700" aria-hidden="true" />
-                  Preview video
-                </button>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => openPreview(null, info.url)}
+                className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-teal-500/10 px-3 py-1.5 text-[11px] font-bold text-teal-700 transition hover:bg-teal-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+              >
+                <Play className="h-3.5 w-3.5 fill-teal-700" aria-hidden="true" />
+                Preview video
+              </button>
               <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-teal-500/10 text-teal-700 ring-1 ring-inset ring-teal-400/30">
                 <Link2 className="h-7 w-7" aria-hidden="true" />
               </span>
@@ -1287,6 +1226,97 @@ export default function VideoDownloader({ showToast, onResultStateChange }) {
       </section>
 
       <VignetteAd open={vignetteOpen} ready={fileReady} onClose={closeVignette} />
+
+      {previewOpen &&
+        createPortal(
+          <div
+            className="animate-ad-backdrop-in fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/85 p-3 backdrop-blur-sm motion-reduce:animate-none sm:p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Video preview"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closePreview()
+            }}
+          >
+            <div className="animate-ad-card-in flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl motion-reduce:animate-none sm:max-h-[calc(100dvh-2rem)]">
+              <div className="flex min-h-[52px] items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5">
+                <p className="text-xs font-bold uppercase tracking-wider text-white">Video preview</p>
+                <button
+                  type="button"
+                  onClick={closePreview}
+                  aria-label="Close preview"
+                  className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1.5 text-[11px] font-bold text-white ring-1 ring-white/20 transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  Close
+                </button>
+              </div>
+
+              <div className="flex min-h-[200px] flex-1 items-center justify-center overflow-y-auto bg-black p-3 sm:min-h-[280px]">
+                {previewLoading ? (
+                  <div className="flex items-center gap-2 text-center text-xs font-semibold text-slate-200">
+                    <Loader2 className="h-5 w-5 animate-spin text-teal-400" aria-hidden="true" />
+                    Loading preview…
+                  </div>
+                ) : previewError ? (
+                  <div className="max-w-sm text-center">
+                    <AlertTriangle className="mx-auto h-7 w-7 text-amber-400" aria-hidden="true" />
+                    <p className="mt-2 text-xs font-semibold text-slate-200">{previewError}</p>
+                  </div>
+                ) : previewIsVideo && previewSrc ? (
+                  <video
+                    ref={previewVideoRef}
+                    src={previewSrc}
+                    poster={remoteInfo?.thumbnail || undefined}
+                    controls
+                    autoPlay
+                    muted
+                    playsInline
+                    preload="auto"
+                    onCanPlay={(event) => event.currentTarget.play().catch(() => {})}
+                    onError={handlePreviewVideoError}
+                    className="max-h-[calc(100dvh-9rem)] w-full rounded-lg bg-black shadow-lg"
+                  />
+                ) : previewSrc ? (
+                  <img
+                    src={previewSrc}
+                    alt="Video cover"
+                    className="max-h-[calc(100dvh-9rem)] w-full rounded-lg object-contain shadow-lg"
+                  />
+                ) : null}
+              </div>
+
+              {previewIsVideo && previewSources.length > 1 && (
+                <div className="flex items-center justify-center gap-3 border-t border-white/10 px-4 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewSrc(previewSources[Math.max(0, previewSources.indexOf(previewSrc) - 1)])}
+                    className="rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-bold text-slate-200 transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-[10px] font-semibold text-slate-400">
+                    {Math.max(1, previewSources.indexOf(previewSrc) + 1)} / {previewSources.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPreviewSrc(
+                        previewSources[
+                          Math.min(previewSources.length - 1, previewSources.indexOf(previewSrc) + 1)
+                        ],
+                      )
+                    }
+                    className="rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-bold text-slate-200 transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
 
     </div>
   )
